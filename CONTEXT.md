@@ -516,3 +516,37 @@ GTAThirdPersonMutator → [Configure Mutations]; confirm the fields appear,
 change e.g. Shoulder, press OK, restart the map, then check
 `[GTAThirdPerson.GTAThirdPersonMutator]` in GTAThirdPerson.ini and the
 in-game behaviour.
+
+### 2026-10-23 — round 10: Configure page trimmed to 10 named options; eased shoulder swap
+
+User feedback on round 9: the page should list ONLY the ten simple values,
+with names that distinguish the three stances (previously "Dist/Shoulder/
+Height" repeated per group and only hovered descriptions told them apart).
+Also: shoulder switching (X key) was the only camera change without easing.
+
+1. **FillPlayInfo trimmed + renamed.** Exactly: Regular Dist/Shoulder/Height,
+   Aim Dist/Shoulder/Height, Crouch Dist/Shoulder/Height, AutoFP (Check).
+   Labels carry the stance prefix so no hover is needed; all in one group
+   (default.RulesGroup). Removed from the page: bEnabled master toggle,
+   tp_turnspeed, tp_easetime, tp_autoadjust — those stay console/ini-only
+   (they are still mirrored + synced, the page is just a view).
+   MutatorHasProps still satisfied (all ten are ClassFrom == mutator).
+   GetDescriptionText updated to match.
+
+2. **Eased shoulder swap.** New runtime var t_shoulderEased (signed): eased
+   in TP_SetCamParams with the same TP_FEase/tp_easetime path as
+   dist/height, target = t_shoulderSign * t_camShoulder. TP_CalcCam AND
+   TP_RefreshFP anchors now use t_shoulderEased * RightVec instead of
+   instant t_shoulderSign * t_camShoulder, so X swings the camera smoothly
+   through the centre. Possess seeds t_shoulderEased = tp_shoulder.
+   TP_SwapShoulder is unchanged (still just flips the sign; the ease makes
+   the swing).
+
+Headless re-verify via the temporary PostBeginPlay probe (removed again):
+exactly 10 settings with the new DisplayName labels (the stock native
+orders the PlayInfo array itself — observed AutoFP/Aim/Crouch/Regular
+ordering, not fill order; groups are identical anyway).
+
+Rebuilt (0 errors, 0 warnings), reinstalled, `ucc server` smoke clean (0
+criticals). README: Configure table replaced by the ten names + "not on the
+page" list; X key description says eased swing.

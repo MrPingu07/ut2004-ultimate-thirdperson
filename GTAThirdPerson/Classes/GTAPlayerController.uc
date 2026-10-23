@@ -55,6 +55,7 @@ var config bool  tp_autobind;       // 0 = never overwrite existing key binds; 1
 var transient bool  bTPAim;
 var transient int   t_shoulderSign;      // +1 / -1
 var transient float t_camDist, t_camShoulder, t_camHeight;
+var transient float t_shoulderEased;     // signed, eased shoulder offset
 var transient float t_bodyTargetYaw;     // desired body yaw (absolute)
 var transient bool  t_bodyTargetValid;
 var transient float t_bodyYaw;           // eased physical body yaw (absolute)
@@ -135,6 +136,7 @@ function Possess( Pawn aPawn )
     t_camDist         = tp_dist;
     t_camShoulder     = tp_shoulder;
     t_camHeight       = tp_height;
+    t_shoulderEased   = tp_shoulder;
     t_bodyYaw         = Rotation.Yaw;
     t_bodyTargetYaw   = Rotation.Yaw;
     t_bodyTargetValid = false;
@@ -546,7 +548,7 @@ function TP_CalcCam( out vector CamLoc, out rotator CamRot )
 
     Anchor = Pawn.Location + Pawn.EyePosition();
     Anchor.Z += t_camHeight;
-    Anchor += t_shoulderSign * t_camShoulder * RightVec;
+    Anchor += t_shoulderEased * RightVec;
 
     // desired camera, pulled in on walls (world geometry only, like the stock shader)
     FreeDist = t_camDist;
@@ -625,7 +627,7 @@ function TP_RefreshFP()
 
     Anchor = Pawn.Location + Pawn.EyePosition();
     Anchor.Z += t_camHeight;
-    Anchor += t_shoulderSign * t_camShoulder * RightVec;
+    Anchor += t_shoulderEased * RightVec;
 
     FreeDist = t_camDist;
     if ( Trace( HitLoc, HitNormal, Anchor - t_camDist * Dir, Anchor, false, vect(10,10,10) ) != None )
@@ -664,6 +666,11 @@ function TP_SetCamParams( float dt )
     t_camDist     = TP_FEase( t_camDist,     D, dt );
     t_camShoulder = TP_FEase( t_camShoulder, S, dt );
     t_camHeight   = TP_FEase( t_camHeight,   H, dt );
+
+    // the shoulder OFFSET is eased signed (t_shoulderSign * magnitude), so
+    // TP_SwapShoulder (X) swings the camera smoothly through the centre with
+    // the same tp_easetime every other camera value gets.
+    t_shoulderEased = TP_FEase( t_shoulderEased, t_shoulderSign * t_camShoulder, dt );
 }
 
 function float TP_FEase( float Current, float Target, float dt )

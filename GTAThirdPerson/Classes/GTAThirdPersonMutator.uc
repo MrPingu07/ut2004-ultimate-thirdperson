@@ -113,53 +113,42 @@ function TP_PushToController()
 
 // PlayInfo support: the Configure Mutators page shows these controls. The
 // extras format is "decimals;min:max" (verified in AddRule, the native reads
-// it to build the numeric edit boxes; floats need the ".:" form).
+// it to build the numeric edit boxes; floats need the ".:" form). Deliberately
+// trimmed to the ten simple values, labels carry the stance name — turn speed,
+// easing time, crouch-toggle and the master switch stay console/ini-only.
 static function FillPlayInfo(PlayInfo PlayInfo)
 {
     Super.FillPlayInfo(PlayInfo);
 
-    PlayInfo.AddSetting( default.RulesGroup, "bEnabled",
-                         "Mod on/off (installs the GTA third person controller)",
-                         0, 1, "Check" );
+    PlayInfo.AddSetting( default.RulesGroup, "tp_dist",           "Regular Dist",     0, 1, "Text", "8;10.0:3000.0" );
+    PlayInfo.AddSetting( default.RulesGroup, "tp_shoulder",       "Regular Shoulder", 0, 1, "Text", "8;0.0:800.0" );
+    PlayInfo.AddSetting( default.RulesGroup, "tp_height",         "Regular Height",   0, 1, "Text", "8;-200.0:400.0" );
 
-    PlayInfo.AddSetting( "Camera on foot", "tp_dist",       "Camera distance",         0, 1, "Text", "8;10.0:3000.0" );
-    PlayInfo.AddSetting( "Camera on foot", "tp_shoulder",   "Shoulder offset",         0, 1, "Text", "8;0.0:800.0" );
-    PlayInfo.AddSetting( "Camera on foot", "tp_height",     "Camera height",           0, 1, "Text", "8;-200.0:400.0" );
-    PlayInfo.AddSetting( "Camera on foot", "tp_turnspeed",  "Body turn speed (deg/s)", 0, 1, "Text", "8;1.0:4000.0" );
-    PlayInfo.AddSetting( "Camera on foot", "tp_easetime",   "Pose easing time (s)",    0, 1, "Text", "8;0.0:2.0" );
-    PlayInfo.AddSetting( "Camera on foot", "tp_autoadjust", "Use the crouch stance while crouching", 0, 1, "Check" );
+    PlayInfo.AddSetting( default.RulesGroup, "tp_aim_dist",       "Aim Dist",         0, 1, "Text", "8;10.0:3000.0" );
+    PlayInfo.AddSetting( default.RulesGroup, "tp_aim_shoulder",   "Aim Shoulder",     0, 1, "Text", "8;0.0:800.0" );
+    PlayInfo.AddSetting( default.RulesGroup, "tp_aim_height",     "Aim Height",       0, 1, "Text", "8;-200.0:400.0" );
 
-    PlayInfo.AddSetting( "Aim stance (Alt)", "tp_aim_dist",     "Distance",    0, 1, "Text", "8;10.0:3000.0" );
-    PlayInfo.AddSetting( "Aim stance (Alt)", "tp_aim_shoulder", "Shoulder",    0, 1, "Text", "8;0.0:800.0" );
-    PlayInfo.AddSetting( "Aim stance (Alt)", "tp_aim_height",   "Height",      0, 1, "Text", "8;-200.0:400.0" );
+    PlayInfo.AddSetting( default.RulesGroup, "tp_crouch_dist",    "Crouch Dist",      0, 1, "Text", "8;10.0:3000.0" );
+    PlayInfo.AddSetting( default.RulesGroup, "tp_crouch_shoulder","Crouch Shoulder",  0, 1, "Text", "8;0.0:800.0" );
+    PlayInfo.AddSetting( default.RulesGroup, "tp_crouch_height",  "Crouch Height",    0, 1, "Text", "8;-200.0:400.0" );
 
-    PlayInfo.AddSetting( "Crouch stance", "tp_crouch_dist",     "Distance",    0, 1, "Text", "8;10.0:3000.0" );
-    PlayInfo.AddSetting( "Crouch stance", "tp_crouch_shoulder", "Shoulder",    0, 1, "Text", "8;0.0:800.0" );
-    PlayInfo.AddSetting( "Crouch stance", "tp_crouch_height",   "Height",      0, 1, "Text", "8;-200.0:400.0" );
-
-    PlayInfo.AddSetting( "First person", "tp_auto_fp",
-                         "Switch to first person when there is no room behind",
-                         0, 1, "Check" );
+    PlayInfo.AddSetting( default.RulesGroup, "tp_auto_fp", "AutoFP", 0, 1, "Check" );
 }
 
-// The PlayInfo page resolves each property's display string through
+// The PlayInfo page resolves each property's description text through
 // GetDescriptionText on its class (the mutator, here).
 static event string GetDescriptionText(string PropName)
 {
-    if ( PropName == "bEnabled" )          return "Install the GTA third person controller";
     if ( PropName == "tp_dist" )           return "Camera distance behind the pawn (UU)";
-    if ( PropName == "tp_shoulder" )       return "Sideways camera offset; side via TP_SwapShoulder";
-    if ( PropName == "tp_height" )         return "Vertical camera offset (positive up)";
-    if ( PropName == "tp_turnspeed" )      return "Body turn speed in degrees per second";
-    if ( PropName == "tp_easetime" )       return "Easing time in seconds for shoulder/height/distance";
-    if ( PropName == "tp_autoadjust" )     return "Use the crouch stance while crouching";
-    if ( PropName == "tp_aim_dist" )       return "Aim mode camera distance (Alt)";
-    if ( PropName == "tp_aim_shoulder" )   return "Aim mode shoulder offset";
-    if ( PropName == "tp_aim_height" )     return "Aim mode camera height";
-    if ( PropName == "tp_crouch_dist" )    return "Crouch camera distance";
-    if ( PropName == "tp_crouch_shoulder") return "Crouch shoulder offset";
-    if ( PropName == "tp_crouch_height" )  return "Crouch camera height";
-    if ( PropName == "tp_auto_fp" )        return "Switch to first person when there is no room behind";
+    if ( PropName == "tp_shoulder" )       return "Sideways offset for the regular stance (side via TP_SwapShoulder)";
+    if ( PropName == "tp_height" )         return "Vertical camera offset for the regular stance (positive up)";
+    if ( PropName == "tp_aim_dist" )       return "Camera distance in aim mode (Alt)";
+    if ( PropName == "tp_aim_shoulder" )   return "Sideways camera offset in aim mode";
+    if ( PropName == "tp_aim_height" )     return "Vertical camera offset in aim mode";
+    if ( PropName == "tp_crouch_dist" )    return "Camera distance while crouched";
+    if ( PropName == "tp_crouch_shoulder" )return "Sideways camera offset while crouched";
+    if ( PropName == "tp_crouch_height" )  return "Vertical camera offset while crouched";
+    if ( PropName == "tp_auto_fp" )        return "Switch to first person automatically when there is no room behind";
     return Super.GetDescriptionText(PropName);
 }
 

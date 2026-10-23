@@ -37,7 +37,7 @@ body turns cosmetically towards the movement direction.
 | Key | Command | Action |
 |---|---|---|
 | `Z` | `TP_Toggle` | first <-> third person |
-| `X` | `TP_SwapShoulder` | swap camera shoulder (eased) |
+| `X` | `TP_SwapShoulder` | swap camera shoulder (eased swing through the centre) |
 | `Alt` | `TP_AimMode` | toggle aim mode |
 
 On first run the mod applies these itself using the stock UT2004 mechanism
@@ -75,24 +75,27 @@ map start.
 
 ### Configure Mutators page (in-game GUI)
 
-Menu → Mutators tab → tick/select *GTAThirdPersonMutator* → `[Configure Mutations]`:
+Menu → Mutators tab → tick/select *GTAThirdPersonMutator* → `[Configure Mutations]`
+— exactly ten options, distinguished by name (no hover needed):
 
-| Group | Controls |
-|---|---|
-| Rules | **Mod on/off** — when off, the mutator leaves the stock first person controller installed |
-| Camera on foot | Distance, Shoulder offset, Camera height, Body turn speed (°/s), Pose easing time, "use the crouch stance" checkbox |
-| Aim stance (Alt) | Distance / Shoulder / Height |
-| Crouch stance | Distance / Shoulder / Height |
-| First person | "Auto first person when blocked" checkbox |
+`Regular Dist` · `Regular Shoulder` · `Regular Height` · `Aim Dist` ·
+`Aim Shoulder` · `Aim Height` · `Crouch Dist` · `Crouch Shoulder` ·
+`Crouch Height` · `AutoFP` (checkbox)
 
-No keybinds or advanced hysteresis values are exposed there (see below).
+Values are saved on **OK** and apply on the **next map load** (same as console
+commands). Deliberately not on that page — console/ini only:
+
+- mod on/off (`bEnabled`, mutator ini section)
+- body turn speed (`TP_SetTurnSpeed`), pose easing time (`TP_SetEaseTime`)
+- crouch-stance toggle (`tp_autoadjust`)
+- keybinds and the auto-FP hysteresis (`tp_fp_in` / `tp_fp_out`)
 
 ### Player keys (applied once on first run, rebindable)
 
 | Key | Command | Action |
 |---|---|---|
 | `Z` | `TP_Toggle` | first <-> third person |
-| `X` | `TP_SwapShoulder` | swap camera shoulder (eased) |
+| `X` | `TP_SwapShoulder` | swap camera shoulder (eased swing through the centre) |
 | `Alt` | `TP_AimMode` | toggle aim mode |
 
 On first run the mod applies these itself using the stock UT2004 mechanism
