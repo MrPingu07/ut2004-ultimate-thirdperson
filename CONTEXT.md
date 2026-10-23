@@ -550,3 +550,45 @@ ordering, not fill order; groups are identical anyway).
 Rebuilt (0 errors, 0 warnings), reinstalled, `ucc server` smoke clean (0
 criticals). README: Configure table replaced by the ten names + "not on the
 page" list; X key description says eased swing.
+
+### 2026-10-23 — round 11: multiplayer audit before 1.0 (2 fixes, nothing "trivial")
+
+"Mod ready for 1.0 — MP was never tested" — audited replication behaviour
+against Engine/PlayerController.uc sources; NOT trivial. Findings:
+
+1. **Remote clients stayed first person.** bBehindView is a plain var, NOT
+   replicated; stock reaches clients only through the ClientSetBehindView
+   RPC (replication block: reliable if Role==ROLE_Authority). We never sent
+   it. FIX: Possess now calls
+   `ClientSetBehindView(true)` when tp_enable && NetMode!=NM_Standalone &&
+   Vehicle(Pawn)==None (vehicle possession manages its own camera, and
+   stock's vehicle branch Pawn.SaveConfig()s a junk ini entry. Host-local /
+   standalone don't need the RPC — but the RPC is simply not executed for
+   those (Role==authority), and the direct assignment covers them).
+2. **Remote players' shots would fly to the world origin.** t_aimPoint is
+   computed in PlayerCalcView = client-side only; on a server it stayed
+   (0,0,0) while AdjustAim believed TP_ShootConvergence()==true (bBehindView
+   is server-side set in Possess). FIX: new transient t_aimValid set right
+   after TP_CalcAimPoint in TP_CalcCam, reset at Possess, added to
+   TP_ShootConvergence(). Remote players (and any server) fall back to the
+   stock aim branch. Listen-host keeps full convergence (same machine).
+3. **Dedicated servers polluted their UT2004.ini Input section**: simulated
+   PostBeginPlay ran TP_SetDefaultBinds server-side; gated with
+   `Level.NetMode != NM_DedicatedServer`.
+
+Other checks done (no change needed): client-side tuning comes from each
+client's own ini section (config vars not replicated, per-player tuning
+works); pawn body facing is server-authoritative (Rotation replicates);
+binds/keybind version run client-side (simulated); PlayerTick reticle mute
+runs client-side on the client's local ONS instances so vehicle HUD works;
+no replicated custom vars added anywhere (children inherit xPlayer
+replication); remote TP execs run locally+replicate (standard UE2 exec
+semantics), mirrored ini writes happen on both machines as intended.
+
+**Not verifiable headlessly:** an actual two-machine test. Server-side
+smokes (dedicated `ucc server`) clean: 0 errors/warnings, 0 criticals.
+User to MP-test: listen server + a second PC joining, check (a) remote
+player enters third person on join, (b) orbit/keys work, (c) shots behave
+(stock-style convergence for remote, crosshair-true for host).
+
+README gained a Multiplayer section (requirements + the remote-aim limit).

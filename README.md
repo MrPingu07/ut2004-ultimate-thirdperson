@@ -166,6 +166,26 @@ Instant Action match (or add
 Requires Wine (the game is the Windows build here) — `UCC.exe` compiles the
 UnrealScript.
 
+## Multiplayer
+
+Primary use is instant action, but the mod is written so a listen-server works;
+tested/verified behaviour and known limits:
+
+- The mutator must be installed (`.u`/`.int`) on **both** the server and every
+  joining client (no redirect configured — share the files, e.g. in a LAN
+  install). Joining clients download/get the package through UT2004's normal
+  mechanism or just copy these three files next to their `System/`.
+- The third-person view is pushed to joining clients with the stock
+  `ClientSetBehindView` replication path, so remote players get the orbit
+  camera, keybinds and their **own local tuning** (each client's ini applies).
+- **Aim difference:** the crosshair-true convergence needs a camera, which a
+  remote player's server-side code does not have — remote players' shots use
+  the stock aim direction, so their bullets leave the muzzle/eye rather than
+  converging on their crosshair (the classic parallax; only noticeable with a
+  large shoulder offset at range).
+- The body-facing fix is server-authoritative (pawn rotation replicates to
+  everyone), so other players see the body turning toward your movement.
+
 ## How it works
 
 All logic lives in `GTAThirdPerson.GTAPlayerController`, a subclass of

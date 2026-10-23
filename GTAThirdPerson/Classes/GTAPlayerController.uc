@@ -64,6 +64,7 @@ var transient float t_lastCamCalc;
 var transient bool  t_camLogged;
 var transient bool  t_unlockLogged;
 var transient vector t_aimPoint;         // convergence point of the shots (world)
+var transient bool   t_aimValid;         // t_aimPoint was computed locally (MP: server has no camera)
 var transient vector t_camOrigin;        // camera origin of the last view
 var transient bool  t_eF, t_eB, t_eL, t_eR, t_wasF, t_wasB, t_wasL, t_wasR;
 var transient eDoubleClickDir t_dblDir;  // our copy of PlayerInput's double click state
@@ -83,8 +84,9 @@ simulated event PostBeginPlay()
     // Default keybinds, applied once (hl-thirdperson style first-run binds).
     // UT2004 has no `bind` console command; the stock UI (GUIController)
     // writes binds with `set Input <key> <command>` and reads them with
-    // `KEYBINDING <key>` — that is what we use here.
-    if ( tp_bindver < TP_BINDVERSION )
+    // `KEYBINDING <key>` — that is what we use here. A dedicated server has
+    // no player input, and `set Input` would just pollute its UT2004.ini.
+    if ( tp_bindver < TP_BINDVERSION && Level.NetMode != NM_DedicatedServer )
         TP_SetDefaultBinds();
 
     // Round 7+8 config migration (see TP_CFGVERSION). Legacy inis carry
@@ -143,6 +145,17 @@ function Possess( Pawn aPawn )
     t_fpLock          = false;
     t_camLogged       = false;
     t_unlockLogged    = false;
+    t_aimValid        = false;
+
+    // bBehindView is not a replicated var: remote clients only ever receive a
+    // behind-view change through the stock ClientSetBehindView RPC (that is
+    // exactly what the stock SetBehindView exec does). Without this the mod
+    // looks like plain first person to every remote player. On foot only —
+    // vehicles own their camera (and stock's vehicle branch SaveConfig()s the
+    // pawn into an ini). The local host/standalone already got the direct
+    // assignment above; a client RPC is simply not executed there.
+    if ( tp_enable && (Level.NetMode != NM_Standalone) && (Vehicle(Pawn) == None) )
+        ClientSetBehindView( true );
 
     // a fresh HUD shows the user's own crosshair again
 
@@ -581,6 +594,7 @@ function TP_CalcCam( out vector CamLoc, out rotator CamRot )
     // the anchor along the camera direction IS the true crosshair ray.
     t_camOrigin = CamLoc;
     TP_CalcAimPoint( Anchor, Dir );
+    t_aimValid = true;
 
     if ( tp_debug && !t_camLogged )
     {
@@ -685,10 +699,15 @@ function float TP_FEase( float Current, float Target, float dt )
 // ---------------------------------------------------------------------------
 
 // Conditions under which the third person convergence aim is active (shots
-// are aimed at the point the camera ray hits, t_aimPoint).
+// are aimed at the point the camera ray hits, t_aimPoint). The validity flag
+// matters in multiplayer: AdjustAim runs server-side, but the camera (and
+// therefore t_aimPoint) only exists on the machines that render a view —
+// without the gate a dedicated server would aim remote players' shots at the
+// world origin, and even a listen server would for its remote clients. Those
+// fall back gracefully to the stock aim path (the first-person branch below).
 simulated function bool TP_ShootConvergence()
 {
-    return tp_enable && bBehindView && !t_fpLock && (Pawn != None)
+    return tp_enable && t_aimValid && bBehindView && !t_fpLock && (Pawn != None)
            && (Vehicle(Pawn) == None) && (Pawn.Health > 0);
 }
 
