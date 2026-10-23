@@ -1,0 +1,6 @@
+[Public]
+Object=(Name=GTAThirdPerson.GTAThirdPersonMutator,Class=Class,MetaClass=Engine.Mutator,Description="GTA-SA Third Person Camera,GTA San Andreas style third person camera for UT2004.")
+
+[GTAThirdPerson.GTAThirdPersonMutator]
+FriendlyName=GTA-SA Third Person Camera
+Description=GTA San Andreas style third person camera: mouse orbits, shoulder/height/distance with easing, cosmetic body turn, crosshair-true shots, auto first person when blocked, crouch adjust, aim mode (keys: Z view, X swap shoulder, ALT aim).

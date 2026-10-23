@@ -1,0 +1,4 @@
+# extracted stock script sources are for local reference only (Epic code)
+reference/
+*.log
+tools/*.bak
