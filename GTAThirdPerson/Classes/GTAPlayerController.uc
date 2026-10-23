@@ -67,6 +67,8 @@ var transient eDoubleClickDir t_dblDir;  // our copy of PlayerInput's double cli
 var transient float t_dblTimer;          // (PlayerInput is private to Engine.PlayerController)
 var transient float t_lastBodyLog;       // debug: body facing log throttle
 var transient float t_lastApplyLog;      // debug: rotation-applied log throttle
+var transient bool  t_spinTest;          // debug: force a continuous slow body spin
+var transient float t_lastReticleScan;   // throttle for the vehicle reticle mute scan
 
 const TP_BINDVERSION = 2;
 const TP_TURNVERSION = 2;
@@ -159,7 +161,46 @@ simulated event PlayerTick( float DeltaTime )
     bFreeCamera = tp_enable && (Pawn != None) && (Vehicle(Pawn) == None)
                   && bBehindView && !t_fpLock;
 
+    if ( tp_enable && ((Level.TimeSeconds - t_lastReticleScan) > 1.0) )
+    {
+        t_lastReticleScan = Level.TimeSeconds;
+        TP_MuteVehReticles();
+    }
+
     Super.PlayerTick( DeltaTime );
+}
+
+// The stock ONS vehicles/turrets (ONSVehicle.DrawHUD, ONSWeaponPawn.DrawHUD)
+// draw a SECOND screen-centred reticle (tankBarrelAligned) once the cannon has
+// aligned with the camera direction (bCorrectAim). The mod keeps the player's
+// own custom crosshair everywhere, so this duplicate is muted. The stock draw
+// places the tile rect symmetrically around the screen centre
+// ([C-X, C+X] x [C-Y, C+Y]) reading AfterCrosshairX/Y *from the class config
+// vars*, so zeroing them shrinks the draw to a single 1x1 pixel at the exact
+// centre (hidden under the player crosshair). Zeroing via the offset vars
+// beats alternatives: CrosshairTexture=None would crash the draw (the script
+// reads CrosshairTexture.USize on possibly-None) and bCorrectAim is a native
+// const that also gates firing. Per-instance so other vehicles/gametypes are
+// untouched; the scan catches late-spawned vehicles too.
+function TP_MuteVehReticles()
+{
+    local ONSWeaponPawn W;
+    local Vehicle       V;
+
+    foreach AllActors( class'Vehicle', V )
+    {
+        W = ONSWeaponPawn(V);
+        if ( W != None )
+        {
+            W.CrosshairX = 0;
+            W.CrosshairY = 0;
+        }
+        else if ( ONSVehicle(V) != None )
+        {
+            ONSVehicle(V).CrosshairX = 0;
+            ONSVehicle(V).CrosshairY = 0;
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -216,6 +257,20 @@ simulated function TP_FaceBody( float dt )
         return;
     if ( P.Physics != PHYS_Walking && P.Physics != PHYS_Falling && P.Physics != PHYS_Swimming )
         return;    // ladders, spider walls, etc: stock behaviour
+
+    // diagnostic: force a continuous ~88 deg/s spin regardless of movement.
+    // If the model does NOT visibly spin while this is on, the rendered yaw
+    // does not come from Pawn.Rotation and the render path needs a different
+    // approach; if it spins, the facing pipeline works end to end.
+    if ( t_spinTest )
+    {
+        t_bodyYaw = TP_YawShort( t_bodyYaw + 16000.0 * dt );
+        BodyRot.Pitch = 0;
+        BodyRot.Yaw   = int(TP_YawShort( t_bodyYaw )) & 65535;
+        BodyRot.Roll  = 0;
+        P.FaceRotation( BodyRot, dt );
+        return;
+    }
 
     bLock = bTPAim || (tp_fire_lock && (P.PressingFire() || P.PressingAltFire()));
     if ( bLock )
@@ -803,6 +858,18 @@ exec function TP_SwapShoulder() // eased shoulder swap
 exec function TP_AimMode()      // tighter camera, body locked to the crosshair
 {
     bTPAim = !bTPAim;
+}
+
+exec function TP_SpinTest()      // debug: force the body to spin continuously
+{
+    local string StateStr;
+
+    t_spinTest = !t_spinTest;
+    if ( t_spinTest )
+        StateStr = "ON";
+    else
+        StateStr = "off";
+    Log( "GTA-TP: spin test "$StateStr );
 }
 
 exec function TP_SetDist( float D )

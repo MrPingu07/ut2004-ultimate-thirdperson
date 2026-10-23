@@ -349,3 +349,42 @@ Fix:
 2. Body debug log no longer prints for vehicles (veh=True noise gone).
 
 Rebuilt (0 errors), reinstalled, `ucc server` smoke clean.
+
+### 2026-10-23 — round 6: stock ONS vehicle reticle muted; body-spin render probe added
+
+Round-6 report: (a) vehicle/turret gun follows the mouse again (bFreeCamera
+fix confirmed); caveat: the stock ONS aiming reticle drawn by the vehicle only
+appears AFTER the cannon finished aligning — user wants it GONE entirely,
+keeping only the player's custom crosshair. (b) body rotation STILL invisible
+even across FP toggles; aim mode / auto-FP / shoulder swap all work.
+
+Vehicle reticle root cause: NOT ours. Stock Onslaught draws a second
+screen-centred reticle itself: ONSVehicle.DrawHUD (~line 1539, gate
+`Weapons[ActiveWeapon].bShowAimCrosshair && bCorrectAim`) and
+ONSWeaponPawn.DrawHUD (~line 753, gate `Gun.bCorrectAim`), texture
+'tankBarrelAligned', appearing exactly when bCorrectAim becomes true = after
+the cannon aligns. Kill paths analysed:
+
+- bCorrectAim: `var const bool` set natively AND gates firing logic (ONSVehicle
+  line 296 / ONSWeapon.uc:360) — cannot zero.
+- CrosshairTexture=None: draw call reads `CrosshairTexture.USize` in script →
+  AccessedNone crash — cannot.
+- Off-screen offsets: the drawn rect is symmetric around screen centre
+  ([C-X, C+X] x [C-Y, C+Y]) — any large offset draws a screen-covering tile —
+  cannot.
+=> Mute via `CrosshairX=0, CrosshairY=0` per instance: collapse to a 1x1 pixel
+at screen centre, hidden behind the player crosshair. Done in
+TP_MuteVehReticles() (per-instance, for ONSVehicle + ONSWeaponPawn, throttled
+1s scan in PlayerTick so late-spawned vehicles are covered).
+
+Body rotation: round-5/6 logs keep proving the ACTOR rotation eases away from
+the camera (this session: pawnYaw ~107° off camYaw through a running segment)
+yet the user sees zero rotation at all. Native-string checks found no
+XGame/ONS mesh-yaw machinery. Decisive render probe added: `TP_SpinTest` exec
+(toggle) forces a continuous ~88 deg/s spin (16000 units/s) on foot regardless
+of movement. If the model visibly spins -> the pipeline works and it is a
+behaviour/expectation/timing question. If the model does NOT spin while the
+camera stays still -> the rendered yaw does not come from Pawn.Rotation for
+the local player pawn and the next layer is the render path.
+
+Rebuilt (0 errors, 0 warnings), reinstalled, smoke clean.
