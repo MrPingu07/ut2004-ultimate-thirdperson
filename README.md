@@ -29,7 +29,8 @@ body turns cosmetically towards the movement direction.
   the body also locks to the crosshair while firing (`tp_fire_lock`).
 - Works as a **mutator on any gametype** (DM, CTF, DOM, Assault...). Bots are
   untouched. No pawn replacement, no weapon replacement.
-- All values configurable, stored in `System/GTAThirdPerson.ini`.
+- All values configurable — in-game via the Mutators tab **[Configure Mutations]**
+  page, or console commands / `System/GTAThirdPerson.ini`.
 
 ## Keys (defaults, applied once, rebindable)
 
@@ -56,9 +57,35 @@ If binds ever stop working, run the console command `TP_SetDefaultBinds`.
 
 ## Settings
 
-All settings live in `System/GTAThirdPerson.ini`, section
-`[GTAThirdPerson.GTAPlayerController]`. Every tuning value also has an
-**in-game console command** (recommended — it clamps and saves for you).
+Tuning is stored in `System/GTAThirdPerson.ini` and can be changed three ways:
+
+1. **In-game GUI** — Mutators tab → select the mutator → `[Configure Mutations]`
+   (grouped sliders/checkboxes; applies on the next map load).
+2. **Console commands** (recommended — they clamp and save, and apply at once).
+3. A text editor.
+
+The 13 simple values (camera/stance/toggle set) live in **two synced places**:
+the mutator section `[GTAThirdPerson.GTAThirdPersonMutator]` is what the GUI
+edits, and `[GTAThirdPerson.GTAPlayerController]` is what the console commands
+and the in-game behaviour use. The mutator pushes its section into the
+controller at every map start; the console commands sync back into the mutator
+section. For hand edits, change the **mutator** section (or use the GUI) —
+manual edits of these 13 keys in the controller section are overwritten at
+map start.
+
+### Configure Mutators page (in-game GUI)
+
+Menu → Mutators tab → tick/select *GTAThirdPersonMutator* → `[Configure Mutations]`:
+
+| Group | Controls |
+|---|---|
+| Rules | **Mod on/off** — when off, the mutator leaves the stock first person controller installed |
+| Camera on foot | Distance, Shoulder offset, Camera height, Body turn speed (°/s), Pose easing time, "use the crouch stance" checkbox |
+| Aim stance (Alt) | Distance / Shoulder / Height |
+| Crouch stance | Distance / Shoulder / Height |
+| First person | "Auto first person when blocked" checkbox |
+
+No keybinds or advanced hysteresis values are exposed there (see below).
 
 ### Player keys (applied once on first run, rebindable)
 
@@ -104,16 +131,18 @@ to the degrees scale on first run.
 
 ### ini-only settings
 
+(`tp_dist`, `tp_shoulder`, `tp_height`, `tp_turnspeed`, `tp_easetime`,
+`tp_autoadjust`, `tp_auto_fp` and the aim/crouch stances are editable in the
+GUI page and/or console commands above; also in the **mutator** ini section.)
+
 | Setting | Default | Description |
 |---|---|---|
 | `tp_enable` | 1 | 0 = stock first person everywhere |
-| `tp_autoadjust` | 1 | use the crouch stance while crouching |
 | `tp_fire_lock` | 1 | body locked to the crosshair while firing (0 = only aim mode locks) |
-| `tp_auto_fp` | 1 | auto first person when there is no room behind |
 | `tp_fp_in` / `tp_fp_out` | 20 / 35 | free-space hysteresis for the auto first person |
 | `tp_autobind` | 1 | first-run binds may overwrite existing keys |
 | `tp_debug` | 0 | one-line info logs (possess/camera/ migrations) |
-| `tp_bindver`, `tp_turnver` | internal | config-defaults migration markers — leave alone |
+| `tp_bindver`, `tp_turnver`, `tp_cfgver` | internal | migration markers — leave alone |
 
 ## Install
 

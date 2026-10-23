@@ -825,66 +825,77 @@ exec function TP_SetDist( float D )
 {
     tp_dist = FClamp( D, 10.0, 3000.0 );
     SaveConfig();
+    TP_SyncMirror();
 }
 
 exec function TP_SetShoulder( float S )
 {
     tp_shoulder = FClamp( S, 0.0, 800.0 );
     SaveConfig();
+    TP_SyncMirror();
 }
 
 exec function TP_SetHeight( float H )
 {
     tp_height = FClamp( H, -200.0, 400.0 );
     SaveConfig();
+    TP_SyncMirror();
 }
 
 exec function TP_SetTurnSpeed( float T )   // degrees per second
 {
     tp_turnspeed = FClamp( T, 1.0, 10000.0 );
     SaveConfig();
+    TP_SyncMirror();
 }
 
 exec function TP_SetCrouchDist( float D )
 {
     tp_crouch_dist = FClamp( D, 10.0, 3000.0 );
     SaveConfig();
+    TP_SyncMirror();
 }
 
 exec function TP_SetCrouchShoulder( float S )
 {
     tp_crouch_shoulder = FClamp( S, 0.0, 800.0 );
     SaveConfig();
+    TP_SyncMirror();
 }
 
 exec function TP_SetCrouchHeight( float H )
 {
     tp_crouch_height = FClamp( H, -200.0, 400.0 );
     SaveConfig();
+    TP_SyncMirror();
 }
 
 exec function TP_SetAimDist( float D )
 {
     tp_aim_dist = FClamp( D, 10.0, 3000.0 );
     SaveConfig();
+    TP_SyncMirror();
 }
 
 exec function TP_SetAimShoulder( float S )
 {
     tp_aim_shoulder = FClamp( S, 0.0, 800.0 );
     SaveConfig();
+    TP_SyncMirror();
 }
 
 exec function TP_SetAimHeight( float H )
 {
     tp_aim_height = FClamp( H, -200.0, 400.0 );
     SaveConfig();
+    TP_SyncMirror();
 }
 
 exec function TP_SetEaseTime( float E )
 {
     tp_easetime = FMax( 0.0, E );
     SaveConfig();
+    TP_SyncMirror();
 }
 
 exec function TP_Info()
@@ -898,6 +909,31 @@ exec function TP_Info()
          $" bodyTarget="$t_bodyTargetYaw
          $" fpLock="$t_fpLock
          $" behind="$bBehindView );
+}
+
+// These 13 tunings have a second owner now: the mutator's Configure Mutators
+// page (PlayInfo) edits the mutator's own config vars, and the mutator pushes
+// them to this class on every map start (GTAThirdPersonMutator.TP_PushToController).
+// To keep a console-command change from being reverted at the next map, every
+// value exec also mirrors the change back into the mutator's class defaults
+// (stock idiom, Engine/PlayerController.uc ~1674).
+function TP_SyncMirror()
+{
+    class'GTAThirdPersonMutator'.default.tp_dist          = tp_dist;
+    class'GTAThirdPersonMutator'.default.tp_shoulder      = tp_shoulder;
+    class'GTAThirdPersonMutator'.default.tp_height        = tp_height;
+    class'GTAThirdPersonMutator'.default.tp_turnspeed     = tp_turnspeed;
+    class'GTAThirdPersonMutator'.default.tp_easetime      = tp_easetime;
+    class'GTAThirdPersonMutator'.default.tp_autoadjust    = tp_autoadjust;
+    class'GTAThirdPersonMutator'.default.tp_auto_fp       = tp_auto_fp;
+    class'GTAThirdPersonMutator'.default.tp_crouch_dist   = tp_crouch_dist;
+    class'GTAThirdPersonMutator'.default.tp_crouch_shoulder = tp_crouch_shoulder;
+    class'GTAThirdPersonMutator'.default.tp_crouch_height = tp_crouch_height;
+    class'GTAThirdPersonMutator'.default.tp_aim_dist      = tp_aim_dist;
+    class'GTAThirdPersonMutator'.default.tp_aim_shoulder  = tp_aim_shoulder;
+    class'GTAThirdPersonMutator'.default.tp_aim_height    = tp_aim_height;
+
+    class'GTAThirdPersonMutator'.static.StaticSaveConfig();
 }
 
 // ============================================================================

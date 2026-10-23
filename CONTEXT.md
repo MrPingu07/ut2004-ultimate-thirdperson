@@ -440,3 +440,79 @@ in-game setters.
    Stale 20/3600-units values removed.
 
 Rebuilt (0 errors, 0 warnings), reinstalled, smoke clean.
+
+### 2026-10-23 — round 9: in-game [Configure Mutators] page wired up
+
+Request: expose the "less complicated" tunings in the Mutators tab page —
+shoulder/height/dist, aim + crouch stances, AutoFP toggle (master on/off came
+along naturally).
+
+**Research (exported GUI2K4 sources, System/MutExport/ — `ucc batchexport PKG
+class uc DIR`; signature: 4th arg is the output dir, NOT a class mask):**
+
+- `MutatorConfigMenu.Initialize()`: builds ONE PlayInfo from all chosen
+  mutators (`xUtil.GetMutatorClasses`), then per mutator shows only settings
+  with `ClassFrom == MutClasses[i]` (plus non-Mutator classes trailing the
+  bFoundMutatorSettings flag — irrelevant for us). Gates: `MutatorHasProps()`
+  requires the mutator itself to contribute ≥1 setting (ClassFrom == its own
+  class). No `Sort` call on this page — fill order preserved.
+- `AddRule` parses Text extras `"dec;min:max"` — decimals count then range
+  (float when the min contains a "." → moFloatEdit). The OK button calls
+  native `PlayInfo.SaveSettings()` which writes each setting into **its**
+  `ClassFrom`'s config ini section (no mirrored save glue needed).
+- `PlayInfo.AddClass()` wants `class<Info>` — PlayerController IS NOT an
+  Info subclass → `AddClass(controller)` impossible ("Cast will always
+  fail"). Mutator-mirrored config vars are therefore the stock idiom.
+
+**Implementation (GTAThirdPersonMutator, now config(GTAThirdPerson)):**
+
+- Master `bEnabled` config bool (False = don't install the controller →
+  stock first person). Doubles as the mutator's own PlayInfo setting,
+  satisfying MutatorHasProps/bFoundMutatorSettings.
+- 13 mirrored config vars (same names as the controller's): tp_dist,
+  tp_shoulder, tp_height, tp_turnspeed, tp_easetime, tp_autoadjust,
+  tp_auto_fp, tp_aim_dist/shoulder/height, tp_crouch_dist/shoulder/height
+  + `tp_cfgver` one-time-init marker.
+- `FillPlayInfo` adds 14 settings (bEnabled Check + 12 Text/Check with
+  ranges matching the exec clamps; turn-speed UI max 4000 °/s). The 3rd arg
+  becomes the label (verified: native copies it into DisplayName);
+  `GetDescriptionText` overridden on the mutator for property descriptions.
+- One-time `TP_InitMirror` (tp_cfgver<1): copies the controller's class
+  defaults (= its own ini values at load) into the mirror, replicating the
+  controller's turn/shoulder migration math when tp_turnver<4 so user tuning
+  is not lost (e.g. saved 250000 units → converts; shoulder bumped to 30).
+- Per map start `TP_PushToController` (only when installing): assigns the
+  controller class defaults (stock idiom `class'X'.default.Y = v`, see
+  Engine/PlayerController.uc ~1674) + `class'...'.static.StaticSaveConfig()`;
+  sets `tp_turnver=4` so the controller's migration branch never re-converts
+  the already-converted pushed values.
+- Controller: `TP_SyncMirror()` (same idiom reversed) called from all 11
+  value execs, so console changes are mirrored back and can't be reverted by
+  the push at the next map. Controller's GetDescriptionText removed (the
+  mutator's is what PlayInfo consults now).
+
+**Headless verification + UCC quirk:** `ucc <pkg>.<commandlet>` loads script
+commandlets, but native PlayInfo.AddSetting CRASHES in the bare UCC
+environment ("Failed to find function None in <Mutator> None") — even for the
+stock MutLightweightVehicles. Workaround: temporary probe in PostBeginPlay
+(real server context) building the same PlayInfo + stock `PI.Dump()` —
+verified 14 settings, correct ClassFrom/groups/ranges/render types,
+DisplayName = passed description, values round-trip (mutator ini ↔ controller
+defaults), `tp_cfgver=1` written, migration markers intact. Probe +
+`TPConfigDumpCommandlet.uc` deleted afterwards (bloat rule).
+
+**Also noted:** user ini carried user's tuning (dist 150, height 30,
+shoulder 0, turn 1000 °/s, aim 50/30/0) — snapshot kept it (no reset to
+compiled defaults); `tp_debug=True` still on. `ucc batchexport` needs
+`<pkg> <exporter> <ext> <dir>`; bare `ucc <cmdlet name>` without package
+prefix fails ("not found"), IOW use `ucc GTAThirdPerson.<Cmdlet>` to run a
+mod commandlet.
+
+Rebuilt (0 errors, 0 warnings), reinstalled, `ucc server` smoke clean.
+
+**Deferred/user-test needed:** actual GUI page render (labels/values) and
+OK-and-persist flow can't be verified headlessly — mutators tab → select
+GTAThirdPersonMutator → [Configure Mutations]; confirm the fields appear,
+change e.g. Shoulder, press OK, restart the map, then check
+`[GTAThirdPerson.GTAThirdPersonMutator]` in GTAThirdPerson.ini and the
+in-game behaviour.
