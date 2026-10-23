@@ -147,6 +147,18 @@ function Possess( Pawn aPawn )
 
 simulated event PlayerTick( float DeltaTime )
 {
+    // Manage the stock bFreeCamera flag here, every tick (UpdateRotation runs
+    // later, inside Super.PlayerTick). On foot, TRUE makes stock UpdateRotation
+    // skip Pawn.FaceRotation(camera) (Engine/PlayerController.uc ~4406), so the
+    // pawn facing is owned solely by TP_FaceBody. In vehicles it must be FALSE:
+    // turret seats (ONSWeaponPawn and kin) swivel the mounted gun via that same
+    // Pawn.FaceRotation call, and a stale TRUE frozen it (round-5 report).
+    // Vehicles were never handled before because TP_SetCamParams does not run
+    // while driving (PlayerCalcView routes them to stock), so the last on-foot
+    // value leaked into the vehicle the whole time.
+    bFreeCamera = tp_enable && (Pawn != None) && (Vehicle(Pawn) == None)
+                  && bBehindView && !t_fpLock;
+
     Super.PlayerTick( DeltaTime );
 }
 
@@ -178,7 +190,10 @@ simulated function TP_FaceBody( float dt )
     local float    Diff, Step;
 
     P = Pawn;
-    if ( tp_debug && (P != None) && ((Level.TimeSeconds - t_lastBodyLog) > 0.25) )
+    // vehicles are stock-handled now (turret swivel runs in native/stock code
+    // once bFreeCamera is false) — no need to log them every 0.25 s
+    if ( tp_debug && (P != None) && (Vehicle(P) == None)
+         && ((Level.TimeSeconds - t_lastBodyLog) > 0.25) )
     {
         t_lastBodyLog = Level.TimeSeconds;
         Log( "GTA-TP: body enable="$tp_enable
@@ -608,11 +623,8 @@ function TP_SetCamParams( float dt )
 {
     local float D, S, H;
 
-    // Stock flag: while set, Engine.PlayerController.UpdateRotation skips
-    // Pawn.FaceRotation(camera) for behindview players (line ~4406 in the
-    // stock source), which would instantly undo our body rotation tick by
-    // tick. The pawn facing is then managed solely by TP_FaceBody.
-    bFreeCamera = tp_enable && bBehindView && !t_fpLock;
+    // (bFreeCamera is maintained per-tick in PlayerTick so vehicles get the
+    // stock value again — see the comment there.)
 
     if ( bTPAim )
     {

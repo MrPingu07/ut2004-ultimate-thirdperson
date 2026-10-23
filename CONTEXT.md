@@ -304,3 +304,48 @@ Fixes this round:
    bFreeCamera's stock consequence.
 
 Rebuilt (0 errors), reinstalled, `ucc server` smoke clean.
+
+### 2026-10-22 — round 5 analysis: vehicle bFreeCamera leak fixed; on-foot rotation verified applied
+
+Round-5 report: (a) body still "doesn't rotate" for the user; (b) NEW: mounted
+guns/turrets (ONSArtillery turret) don't follow the mouse, while camera orbit +
+1st/3rd toggle in vehicles work.
+
+Debug log findings:
+
+- On foot, round-4 build works mechanically: `pawnYawPre` eases toward the
+  movement target at ~3800 units/s (tp_turnspeed=3600) and STICKS across ticks
+  (`body apply eased=X pawnYawAfter=X`, next line's pawnYawPre=X). The saved
+  tp_turnspeed=1 was also confirmed auto-reset by the tp_turnver migration
+  ("tp_turnspeed reset to 3600" in the log). The pawn's Rotation genuinely
+  decouples from the camera.
+- `strings` checks: NO "FaceRotation"/"RootBone" strings in XGame.dll nor
+  Onslaught.dll (Engine.dll's known rejection was the marker) => no
+  XGame/Ons native mesh-yaw machinery; rendered pawn yaw comes from pawn
+  Rotation like the stock game. On-foot visual question now rests on the user
+  watching the artillery during most of the test (ONS-IslandHop possess log
+  alternates xPawn0/ONSArtillery0 a lot).
+
+Vehicle bug root cause (proven in the log + stock source):
+
+- The veh segments logged `freedCam=True` while driving: our bFreeCamera was
+  set only in TP_SetCamParams, which never runs in vehicles
+  (PlayerCalcView routes them to stock), so the last on-foot value leaked and
+  stayed TRUE inside the vehicle.
+- With bFreeCamera=TRUE, stock UpdateRotation skips
+  `Pawn.FaceRotation(camera)` (Engine/PlayerController.uc line ~4406,
+  gate `(!bFreeCamera || !bBehindView)`). Turret seats are
+  `ONSWeaponPawn extends Vehicle` — their mounted gun swivels exactly via that
+  pawn FaceRotation call — so it froze. ONSVehicle's own FaceRotation is an
+  EMPTY stub (Engine/Vehicle.uc:1413), and our TP_FaceBody skips vehicles: no
+  other rotator touched the seat.
+
+Fix:
+
+1. bFreeCamera is now maintained EVERY tick in PlayerTick with the condition
+   `tp_enable && Pawn && Vehicle(Pawn)==None && bBehindView && !t_fpLock`
+   (vehicles get FALSE => stock turret swivel restored; single source of
+   truth; TP_SetCamParams no longer writes it).
+2. Body debug log no longer prints for vehicles (veh=True noise gone).
+
+Rebuilt (0 errors), reinstalled, `ucc server` smoke clean.
