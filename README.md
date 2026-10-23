@@ -1,4 +1,4 @@
-# ut2k4tp — GTA San Andreas-style third person for UT2004
+# UT2004 Ultimate ThirdPerson — GTA San Andreas-style third person for UT2004
 
 A mutator for **Unreal Tournament 2004** that adds a GTA-style third person
 camera (port of the design of [hl-thirdperson](https://github.com/MrPingu07/hl-thirdperson),
@@ -150,18 +150,34 @@ GUI page and/or console commands above; also in the **mutator** ini section.)
 ## Install
 
 The repo symlinks its source into the game directory, so the compiler sees it.
+## Install
+
+Two options:
+
+### One-step install (release zip)
+
+Download the release zip (`ut2004-ultimate-thirdperson-vX.Y.zip`) from the
+[releases page](https://github.com/mrpingu07/ut2004-ultimate-thirdperson/releases)
+and **extract it into your UT2004 directory** (the zip contains `System/` with
+the package, so the files land where they belong). Then pick the mutator
+**GTA-SA Third Person Camera** in any Instant Action / network match.
+
+To uninstall, delete `System/GTAThirdPerson.u`, `.int` and `.ucl` (and
+`System/GTAThirdPerson.ini` to remove your settings).
+
+### From source
+
 On a fresh machine:
 
 ```bash
-ln -sfn /path/to/ut2k4tp/GTAThirdPerson /path/to/UT2004/GTAThirdPerson
+ln -sfn /path/to/ut2004-ultimate-thirdperson/GTAThirdPerson /path/to/UT2004/GTAThirdPerson
 tools/build.sh            # adds EditPackages=GTAThirdPerson + wine UCC.exe make
 tools/install.sh          # copies .u/.int/.ucl into System/
 tools/install.sh --binds  # additionally binds Z/X/Alt if those keys are free
 ```
 
-Then pick the mutator **GTA-SA Third Person Camera** in the mutator list of any
-Instant Action match (or add
-`?mutator=GTAThirdPerson.GTAThirdPersonMutator` to the map URL).
+The release zip is built from an installed game with
+`tools/package.sh <version>` after `build.sh` + `install.sh`.
 
 Requires Wine (the game is the Windows build here) — `UCC.exe` compiles the
 UnrealScript.
@@ -252,3 +268,9 @@ CONTEXT.md                working notes / progress log
 ```
 
 See `CONTEXT.md` for the full verified-engine-notes and progress history.
+
+## License
+
+Released under the **GNU General Public License version 3** — see
+[LICENSE](LICENSE) in the repository root and the short headers in the
+`.uc` sources. This program comes with absolutely no warranty.

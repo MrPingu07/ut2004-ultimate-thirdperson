@@ -2,3 +2,4 @@
 reference/
 *.log
 tools/*.bak
+dist/
