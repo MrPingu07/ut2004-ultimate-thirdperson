@@ -10,12 +10,20 @@ body turns cosmetically towards the movement direction.
 
 - Orbit camera with adjustable **shoulder / height / distance**, eased when the
   stance changes (`tp_easetime`).
+- **Free character facing (GTA-style)**: the body is decoupled from the mouse —
+  it turns towards the movement direction with a configurable speed (`tp_turnspeed`),
+  locks to the crosshair while firing or in aim mode, and stays put while you
+  orbit the camera standing still. The camera-relative input handling is
+  re-based on the camera axes for walking, so you always move where the
+  camera points, regardless of where the body looks.
+- **True reticle**: in third person the stock centre crosshair is replaced by a
+  black & white dot drawn on a ray traced from the camera perspective through
+  the screen centre (the real shot convergence point) — bullets originate from
+  the pawn's eyes but are aimed **at** the dot, so shoulder offset and looking
+  straight up/down never introduce parallax.
 - Camera-relative movement and crosshair-true shots (including **shot pitch**;
   see *How it works* below — stock UT2004 behind view loses pitch).
 - Full vertical look (stock UE2 camera pitch, ~90°).
-- Cosmetic body turn towards the movement direction with a configurable speed;
-  the physics stays stock so swimming, ladders, vehicles are untouched and the
-  server always receives your aim angles.
 - **Automatic first person** when there is no room behind the character (walking
   backwards into a wall), back to third person when there is (with hysteresis).
 - **Crouch auto-adjust**: tighter camera values while crouching.
@@ -60,7 +68,7 @@ or the exec commands below):
 | `tp_dist` | 110 | camera distance |
 | `tp_shoulder` | 20 | camera shoulder (magnitude; the sign or `TP_SwapShoulder` sets the side) |
 | `tp_height` | 0 | vertical camera offset (positive up) |
-| `tp_turnspeed` | 3600 | cosmetic body turn speed, rotator units/s (~20°/s) |
+| `tp_turnspeed` | 3600 | body turn speed, rotator units/s (~20°/s) |
 | `tp_easetime` | 0.25 | easing time in seconds for shoulder/height/distance |
 | `tp_autoadjust` | 1 | use crouch values while crouching |
 | `tp_crouch_dist` / `tp_crouch_shoulder` / `tp_crouch_height` | 75 / 18 / 12 | crouch stance |
@@ -68,10 +76,8 @@ or the exec commands below):
 | `tp_fire_lock` | 1 | body locked to the crosshair while firing |
 | `tp_auto_fp` | 1 | auto first person when there is no room behind |
 | `tp_fp_in` / `tp_fp_out` | 20 / 35 | free-space hysteresis for the auto first person |
-| `tp_bone` | Bip01 | root bone used for the cosmetic turn |
-| `tp_bonespace` | 1 | `SetBoneRotation` space (1 = global) |
 | `tp_autobind` | 1 | auto-binds may overwrite existing keys on first run |
-| `tp_debug` | 0 | logs install/probe details once per game |
+| `tp_debug` | 0 | logs install details once per game |
 
 Exec commands on the player controller: `TP_Toggle`, `TP_SwapShoulder`,
 `TP_AimMode`, `TP_SetDist <f>`, `TP_SetShoulder <f>`, `TP_SetHeight <f>`,
@@ -105,28 +111,38 @@ All logic lives in `GTAThirdPerson.GTAPlayerController`, a subclass of
 defaultproperties, and mutators load during `InitGame`, before `Login()`
 resolves the class — verified against the stock sources).
 
-- Stock UE2 orients movement **and weapon aim** along the controller
-  `Rotation`, and the stock `Pawn.FaceRotation` makes the pawn follow it every
-  tick. So keeping `Rotation` as the mouse-driven camera rotation gives
-  camera-relative movement and crosshair-true aiming in every movement state
-  (walking, swimming, ladders) for free.
-- **AdjustAim override** (copied from stock with one fix): stock UT2004 aim
-  falls back to `Pawn.Rotation` in third person, and `FaceRotation` zeroes the
-  pawn pitch while walking — shots would lose their vertical aim. We return the
-  controller `Rotation` (the camera direction with pitch) instead.
-- **Cosmetic body turn**: the root bone (`Pawn.RootBone`, `'Bip01'` for UT2004
-  characters) is rotated each frame with `SetBoneRotation` by the yaw difference
-  between the camera and the desired body facing (movement direction, or the
-  crosshair while firing / in aim mode). This is client-side and visual only —
-  the physics pawn keeps the stock rotation.
-- **Camera math** happens in `PlayerCalcView`: pivot at the pawn eye position,
+- **Camera** math happens in `PlayerCalcView`: pivot at the pawn eye position,
   shoulder/height offsets, distance along the view direction, a wall-collision
   trace, and an auto-first-person fallback with hysteresis (`tp_fp_in/out`).
+  The controller `Rotation` stays the mouse-driven camera rotation.
+- **Free body facing**: after the stock `UpdateRotation` faces the pawn at the
+  camera, we rotate the pawn back towards the body target — the movement
+  direction while running (GTA-style), the crosshair while firing or in aim
+  mode, wherever it last was while idle — always with `tp_turnspeed` and
+  `Pawn.FaceRotation` (the pawn's real physical rotation, so animations match
+  and other players/bots see the correct facing). Only walking/falling/swimming
+  physics get this; ladders, spider mode and vehicles keep stock behaviour.
+  Because the pawn no longer faces the camera, `state PlayerWalking.PlayerMove`
+  is copied with its acceleration basis switched from `Pawn.Rotation` to the
+  controller `Rotation` — the other movement states (swimming, climbing,
+  spider) already use the controller axes in stock code. The double-click
+  dodge bookkeeping is mirrored too (`PlayerInput` is private to the stock
+  controller class).
+- **Aim ray / reticle**: every camera frame we trace the true crosshair ray
+  (camera origin along `vector(Rotation)`, 10000 units, actors enabled) into
+  the world — that intersection is the `t_aimPoint`. `AdjustAim` returns the
+  direction from the real fire origin (pawn's muzzle/eyes) to `t_aimPoint`, so
+  shots converge on the reticle exactly (no parallax from the shoulder offset
+  or look pitch); `AdjustAim` also fixes stock third person losing shot pitch.
+  A local `Interaction` (`GTAThirdPerson.GTAInteraction`, registered through
+  `Player.InteractionMaster.AddInteraction`, one instance per viewport that
+  survives map changes) draws a black & white dot at that point with
+  `Canvas.WorldToScreen` while the stock centre crosshair is hidden
+  (`myHUD.bCrosshairShow`, the same mechanism stock uses for screenshot mode).
 
-Known limitations: cosmetic turn is client-side (other players see the stock
-follow-the-camera mesh, like hl-thirdperson); thrown weapons use the pawn
-rotation (yaw only, stock behavior in behind view); not yet tested on dedicated
-servers with remote clients.
+Known limitations: first-person `AdjustAim` scanning (aiming help) is stock
+and only active in first person; thrown weapons keep stock yaw behaviour; not
+yet tested on dedicated servers with remote clients.
 
 ## Repo layout
 

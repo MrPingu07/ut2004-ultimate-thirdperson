@@ -3,24 +3,25 @@
 //
 // GTA San Andreas style third person camera for UT2004, mirroring the design
 // of hl-thirdperson (GoldSrc). Mouse orbits the camera, movement is
-// camera-relative (UE2 orients movement off the controller rotation natively),
-// shots stay on the crosshair, and the body turns cosmetically towards the
-// movement direction.
+// camera-relative, and shots land exactly on the reticle (which is drawn on
+// the end of the shot convergence ray).
 //
 // How it works (verified against decompiled stock sources):
-//  - Camera: PlayerCalcView() override. Movement input and weapon aim follow
-//    the controller Rotation, so keeping Rotation as the camera rotation keeps
-//    movement camera-relative and aiming crosshair-true for free.
-//  - Shots: stock PlayerController.AdjustAim() returns Pawn.Rotation when
-//    bBehindView (yaw only, pitch zeroed while walking). We return the
-//    controller Rotation instead so shots keep their pitch at the crosshair.
-//    The aims (target scanning / aiming help) stays stock.
-//  - Body: UE2 rotates the pawn with the mouse (Pawn.FaceRotation with
-//    controller rotation each tick). We keep that (movement stays camera
-//    relative in every movement state) and instead rotate the root bone
-//    ('Bip01') by the difference between the camera yaw and the desired body
-//    facing? movement direction (or camera crosshair while firing / aiming).
-//    Purely visual and client-side, exactly like hl-thirdperson.
+//  - Camera: PlayerCalcView() override builds an offset orbit camera; the
+//    controller Rotation stays the camera rotation, and every stock movement
+//    state except PlayerWalking is already camera-relative natively.
+//  - Body: the pawn's PHYSICAL rotation is decoupled from the camera. After
+//    the stock UpdateRotation faces the pawn at the camera, we rotate the pawn
+//    back towards the body target (movement direction, or the crosshair while
+//    aiming/firing) with FaceRotation. Because the pawn no longer faces the
+//    camera, walking input is re-based on the controller axes in our
+//    state PlayerWalking copy. No bone hacks, server-accurate facing.
+//  - Shots: while in third person we compute the real crosshair ray (camera
+//    origin along vector(Rotation)) and trace it into the world; the result
+//    (t_aimPoint) is used by AdjustAim so bullets/projectiles converge on the
+//    reticle regardless of the shoulder offset or the look pitch (parallax fix).
+//  - Reticle: a local Interaction (GTAInteraction) draws a black & white dot
+//    at t_aimPoint via WorldToScreen, replacing the stock centre crosshair.
 //=============================================================================
 class GTAPlayerController extends xPlayer
     config(GTAThirdPerson);
@@ -30,7 +31,7 @@ var config bool  tp_enable;         // master switch (0 = stock first person)
 var config float tp_dist;           // camera distance
 var config float tp_shoulder;       // magnitude; sign sets side in every stance
 var config float tp_height;         // vertical camera offset (positive up)
-var config float tp_turnspeed;      // cosmetic body turn speed, rotator units per second
+var config float tp_turnspeed;      // body turn speed, rotator units per second
 var config float tp_easetime;       // easing time in seconds for shoulder/height/distance
 var config bool  tp_autoadjust;     // use the crouch values while crouching
 var config float tp_crouch_dist;
@@ -43,8 +44,6 @@ var config bool  tp_fire_lock;      // body locked to the crosshair while firing
 var config bool  tp_auto_fp;        // auto first person when there is no room behind
 var config float tp_fp_in;          // free space below which it switches to first person
 var config float tp_fp_out;         // free space from which it returns to third person
-var config name  tp_bone;           // root bone used for the cosmetic yaw
-var config int   tp_bonespace;      // SetBoneRotation space (1 = global)
 var config int   tp_bindver;        // internal: version of the default binds already applied
 var config bool  tp_debug;          // logs install details once per game (for playtesting)
 var config bool  tp_autobind;       // 0 = never overwrite existing key binds; 1 = force default binds once
@@ -53,24 +52,20 @@ var config bool  tp_autobind;       // 0 = never overwrite existing key binds; 1
 var transient bool  bTPAim;
 var transient int   t_shoulderSign;      // +1 / -1
 var transient float t_camDist, t_camShoulder, t_camHeight;
-var transient float t_bodyYawOffset;
-var transient float t_bodyTargetYaw;
+var transient float t_bodyTargetYaw;     // desired body yaw (absolute)
 var transient bool  t_bodyTargetValid;
+var transient float t_bodyYaw;           // eased physical body yaw (absolute)
 var transient bool  t_fpLock;
 var transient float t_lastCamCalc;
 var transient bool  t_camLogged;
 var transient bool  t_unlockLogged;
-var transient bool  t_probed;          // cosmetic body probe done
-var transient name  t_bodyBone;        // bone chosen for the cosmetic turn
-var transient int   t_bodySpace;       // SetBoneRotation space chosen
-
-// cosmetic body probe state (runs once per possess, picks bone+space that works)
-var transient int       p_i;
-var transient bool      p_waiting;
-var transient name      p_bone;
-var transient int       p_space;
-var transient float     p_before;
-var transient rotator   p_probeRot;
+var transient vector t_aimPoint;         // convergence/reticle point (world)
+var transient vector t_camOrigin;        // camera origin of the last view
+var transient bool  t_crossSuppressed;   // stock crosshair currently hidden
+var transient bool  t_crossSaved;        // user crosshair setting to restore
+var transient bool  t_eF, t_eB, t_eL, t_eR, t_wasF, t_wasB, t_wasL, t_wasR;
+var transient eDoubleClickDir t_dblDir;  // our copy of PlayerInput's double click state
+var transient float t_dblTimer;          // (PlayerInput is private to Engine.PlayerController)
 
 const TP_BINDVERSION = 2;
 
@@ -120,21 +115,19 @@ function Possess( Pawn aPawn )
     t_camDist         = tp_dist;
     t_camShoulder     = tp_shoulder;
     t_camHeight       = tp_height;
-    t_bodyYawOffset   = 0.0;
+    t_bodyYaw         = Rotation.Yaw;
     t_bodyTargetYaw   = Rotation.Yaw;
     t_bodyTargetValid = false;
     t_fpLock          = false;
     t_camLogged       = false;
     t_unlockLogged    = false;
-    t_lastCamCalc     = Level.TimeSeconds;
 
-    // reset the cosmetic body probe for the new pawn
-    t_probed    = false;
-    p_i         = 0;
-    p_waiting   = false;
-    p_probeRot.Pitch = 0;
-    p_probeRot.Yaw   = 4096;    // ~22.5° test rotation
-    p_probeRot.Roll  = 0;
+    // a fresh HUD instance is spawned per game, so re-apply suppression next tick
+    t_crossSuppressed = false;
+
+    // register the black & white dot reticle overlay (once per viewport; the
+    // interaction object persists across maps, so duplicates are checked)
+    TP_AddReticle();
 
     if ( tp_debug )
         Log( "GTA-TP: Possess pawn="$aPawn$" controller="$Class
@@ -145,188 +138,77 @@ function Possess( Pawn aPawn )
 simulated event PlayerTick( float DeltaTime )
 {
     Super.PlayerTick( DeltaTime );
-    TP_UpdateTick( DeltaTime );
+    TP_UpdateCrosshair();
 }
 
 // ---------------------------------------------------------------------------
-// cosmetic body + safety rerouting
+// body facing (decoupled from the camera)
 // ---------------------------------------------------------------------------
-function TP_UpdateTick( float dt )
+
+// Overrides the stock version, which the mouse view code calls after facing
+// the pawn at the camera. The Super call keeps all of that (input, shake,
+// pitch limits, FP facing); afterwards we physically rotate the pawn towards
+// the GTA body target. Stock facing for ladder/spider/vehicles/death/FP.
+function UpdateRotation( float DeltaTime, float maxPitch )
 {
-    local Pawn P;
+    Super.UpdateRotation( DeltaTime, maxPitch );
+    TP_FaceBody( DeltaTime );
+}
+
+simulated function TP_FaceBody( float dt )
+{
+    local Pawn     P;
+    local bool     bLock;
+    local vector   HV;
+    local rotator  BodyRot;
+    local float    Diff, Step;
 
     P = Pawn;
+    if ( !tp_enable || !bBehindView || t_fpLock )
+        return;    // first person: stock facing applies
 
-    if ( P == None || !tp_enable )
-    {
+    if ( P == None || (Vehicle(P) != None) || (P.Health <= 0) )
         return;
-    }
+    if ( P.Physics != PHYS_Walking && P.Physics != PHYS_Falling && P.Physics != PHYS_Swimming )
+        return;    // ladders, spider walls, etc: stock behaviour
 
-    if ( Vehicle(P) != None || P.Health <= 0
-         || P.Physics == PHYS_Ladder || P.Physics == PHYS_Spider )
+    bLock = bTPAim || (tp_fire_lock && (P.PressingFire() || P.PressingAltFire()));
+    if ( bLock )
     {
-        // stock situations: cancel the cosmetic offset
-        TP_ResetBody( P );
-        return;
-    }
-
-    TP_UpdateBody( dt, P );
-}
-
-function TP_ResetBody( Pawn P )
-{
-    local name B;
-    local int S;
-
-    if ( t_probed ) { B = t_bodyBone; S = t_bodySpace; }
-    else            { B = tp_bone;    S = tp_bonespace; }
-    if ( B == 'None' ) B = 'Bip01';
-
-    t_bodyYawOffset   = 0.0;
-    t_bodyTargetValid = false;
-    P.SetBoneRotation( B, rot(0,0,0), S, 1.0 );
-}
-
-function TP_UpdateBody( float dt, Pawn P )
-{
-    local float Step, Diff, HVel;
-    local vector HV;
-    local bool bLockBody;
-
-    if ( !t_probed )
-    {
-        TP_ProbeTick( P );
-        return;
-    }
-
-    bLockBody = ( bTPAim || (tp_fire_lock && (P.PressingFire() || P.PressingAltFire())) );
-    if ( bLockBody )
-    {
-        // body locked to the crosshair (tpaim or firing)
+        // aiming/firing: the body is locked to the crosshair
         t_bodyTargetYaw   = Rotation.Yaw;
         t_bodyTargetValid = true;
     }
     else
     {
         HV   = P.Velocity;
-        HV.Z = 0;
-        HVel = VSize(HV);
-        if ( HVel > 40.0 )
+        HV.Z = 0.0;
+        if ( VSize(HV) > 40.0 )
         {
-            // body turns towards the movement direction
+            // moving: the body faces the movement direction
             t_bodyTargetYaw   = rotator(HV).Yaw;
             t_bodyTargetValid = true;
         }
-        // while idle the last target is kept, so the camera can orbit freely
+        // idle: keep the last target, so the mouse can orbit around the body
     }
 
     if ( !t_bodyTargetValid )
-    {
-        t_bodyYawOffset = 0.0;
-        TP_ApplyBody( P, 0.0 );
         return;
-    }
 
-    Diff = TP_YawShort( t_bodyTargetYaw - Rotation.Yaw );
+    t_bodyYaw = TP_YawShort( t_bodyYaw );
     Step = FMax( 1.0, tp_turnspeed * dt );
-    if ( Diff - t_bodyYawOffset > Step )
-        t_bodyYawOffset += Step;
-    else if ( Diff - t_bodyYawOffset < -Step )
-        t_bodyYawOffset -= Step;
+    Diff = TP_YawShort( t_bodyTargetYaw - t_bodyYaw );
+    if      ( Diff >  Step )
+        t_bodyYaw += Step;
+    else if ( Diff < -Step )
+        t_bodyYaw -= Step;
     else
-        t_bodyYawOffset = Diff;
-
-    TP_ApplyBody( P, t_bodyYawOffset );
-}
-
-// ---------------------------------------------------------------------------
-// cosmetic body auto-probe
-//
-// UE2 sets bone rotations on the live skeletal instance and the semantics of
-// SetBoneRotation's Space (and valid root bone names) vary between
-// meshes/engines asserting them from code alone is not enough, so we probe:
-// apply a 22.5° yaw to each candidate bone with Space 1 then Space 0, read the
-// bone rotation back on the next tick, and adopt the first combination whose
-// rotation actually changed. Result logged under tp_debug.
-// ---------------------------------------------------------------------------
-function name TP_ProbeBoneName( int idx )
-{
-    switch ( idx )
-    {
-    case 0: return 'Bip01';
-    case 1: return 'Bip01 Pelvis';
-    case 2: return 'root';
-    case 3: return 'head';
-    }
-    return 'None';
-}
-
-function TP_ClearProbe( Pawn P )
-{
-    local rotator Zero;
-
-    Zero.Pitch = 0; Zero.Yaw = 0; Zero.Roll = 0;
-    P.SetBoneRotation( p_bone, Zero, p_space, 1.0 );
-}
-
-function TP_ProbeTick( Pawn P )
-{
-    local float Now;
-
-    if ( p_waiting )
-    {
-        Now = float(P.GetBoneRotation( p_bone, p_space ).Yaw);
-        if ( Abs( TP_YawShort( Now - p_before ) ) > 2048.0 )
-        {
-            // this (bone, space) pair really rotates: adopt it
-            t_bodyBone  = p_bone;
-            t_bodySpace = p_space;
-            TP_ClearProbe( P );
-            t_probed = true;
-            if ( tp_debug )
-                Log( "GTA-TP: cosmetic body probe: bone='"$t_bodyBone$"' space="$t_bodySpace );
-            return;
-        }
-        p_waiting = false;
-        p_i++;             // pair failed, next one
-    }
-
-    while ( !p_waiting )
-    {
-        if ( p_i >= 8 )    // 4 candidate bones x 2 spaces
-        {
-            // nothing responded: keep the configured defaults
-            t_bodyBone  = 'Bip01';
-            t_bodySpace = tp_bonespace;
-            t_probed = true;
-            if ( tp_debug )
-                Log( "GTA-TP: cosmetic body probe FAILED; using bone='"$t_bodyBone$"' space="$t_bodySpace$" (set tp_bone/tp_bonespace to override)" );
-            return;
-        }
-
-        p_bone = TP_ProbeBoneName( p_i / 2 );
-        if ( (p_i % 2) == 0 ) p_space = 1;
-        else                  p_space = 0;
-        if ( tp_bone != 'None' && p_i == 0 )
-            p_bone = tp_bone;
-
-        p_before = float(P.GetBoneRotation( p_bone, p_space ).Yaw);
-        P.SetBoneRotation( p_bone, p_probeRot, p_space, 1.0 );
-        p_waiting = true;
-    }
-}
-
-function TP_ApplyBody( Pawn P, float YawOff )
-{
-    local rotator BodyRot;
-
-    if ( !t_probed )   // shouldn't happen, be safe
-        return;
+        t_bodyYaw = t_bodyTargetYaw;
 
     BodyRot.Pitch = 0;
-    BodyRot.Yaw   = int(YawOff);
+    BodyRot.Yaw   = int(TP_YawShort( t_bodyYaw )) & 65535;
     BodyRot.Roll  = 0;
-    P.SetBoneRotation( t_bodyBone, BodyRot, t_bodySpace, 1.0 );
+    P.FaceRotation( BodyRot, dt );
 }
 
 function float TP_YawShort( float Diff )
@@ -334,6 +216,187 @@ function float TP_YawShort( float Diff )
     while ( Diff >  32768.0 ) Diff -= 65536.0;
     while ( Diff < -32768.0 ) Diff += 65536.0;
     return Diff;
+}
+
+// ---------------------------------------------------------------------------
+// third person movement: walking input re-based on the camera axes
+// ---------------------------------------------------------------------------
+
+// Mirror of Engine.PlayerInput.CheckForDoubleClickMove using our own state
+// vars (see the notes in the PlayerWalking copy below).
+function eDoubleClickDir TP_DblClickMove( float DeltaTime )
+{
+    local eDoubleClickDir DoubleClickMove, OldDoubleClick;
+    local float DClickTime;
+
+    if ( !DodgingIsEnabled() )
+        return DCLICK_None;
+
+    DClickTime = class'PlayerInput'.default.DoubleClickTime;
+
+    if ( t_dblDir == DCLICK_Active )
+        DoubleClickMove = DCLICK_Active;
+    else
+        DoubleClickMove = DCLICK_None;
+
+    if ( DClickTime > 0.0 )
+    {
+        if ( t_dblDir == DCLICK_Active )
+        {
+            if ( (Pawn != None) && (Pawn.Physics == PHYS_Walking) )
+            {
+                t_dblTimer = 0;
+                t_dblDir   = DCLICK_Done;
+            }
+        }
+        else if ( t_dblDir != DCLICK_Done )
+        {
+            OldDoubleClick = t_dblDir;
+            t_dblDir       = DCLICK_None;
+
+            if ( t_eF && t_wasF )
+                t_dblDir = DCLICK_Forward;
+            else if ( t_eB && t_wasB )
+                t_dblDir = DCLICK_Back;
+            else if ( t_eL && t_wasL )
+                t_dblDir = DCLICK_Left;
+            else if ( t_eR && t_wasR )
+                t_dblDir = DCLICK_Right;
+
+            if ( t_dblDir == DCLICK_None )
+                t_dblDir = OldDoubleClick;
+            else if ( t_dblDir != OldDoubleClick )
+                t_dblTimer = DClickTime + 0.5 * DeltaTime;
+            else
+                DoubleClickMove = t_dblDir;
+        }
+
+        if ( t_dblDir == DCLICK_Done )
+        {
+            t_dblTimer = FMin( t_dblTimer - DeltaTime, 0.0 );
+            if ( t_dblTimer < -0.35 )
+            {
+                t_dblDir   = DCLICK_None;
+                t_dblTimer = DClickTime;
+            }
+        }
+        else if ( (t_dblDir != DCLICK_None) && (t_dblDir != DCLICK_Active) )
+        {
+            t_dblTimer -= DeltaTime;
+            if ( t_dblTimer < 0 )
+            {
+                t_dblDir   = DCLICK_None;
+                t_dblTimer = DClickTime;
+            }
+        }
+    }
+    return DoubleClickMove;
+}
+
+// Copy of the stock (Engine.PlayerController) state PlayerWalking.PlayerMove.
+// UE2 orients ground movement off the pawn rotation; since our pawn faces the
+// movement target instead of the camera, the acceleration basis is switched
+// from Pawn.Rotation to the controller Rotation. The other states
+// (PlayerSwimming, PlayerClimbing, PlayerSpidering, ...) already build their
+// acceleration from the controller axes in stock code, no copy needed.
+// ProcessMove/NotifyLanded/BeginState/etc. are not redeclared and keep
+// resolving to the UnrealPlayer/Engine implementations (class-major lookup).
+state PlayerWalking
+{
+    function PlayerMove( float DeltaTime )
+    {
+        local vector X,Y,Z, NewAccel;
+        local eDoubleClickDir DoubleClickMove;
+        local rotator OldRotation, ViewRotation;
+        local bool  bSaveJump;
+
+        if( Pawn == None )
+        {
+            GotoState('Dead'); // this was causing instant respawns in mp games
+            return;
+        }
+
+        GetAxes(Rotation,X,Y,Z);   // GTA-TP: camera basis, not the pawn facing
+
+        // Update acceleration.
+        NewAccel = aForward*X + aStrafe*Y;
+        NewAccel.Z = 0;
+        if ( VSize(NewAccel) < 1.0 )
+            NewAccel = vect(0,0,0);
+
+        // double click (dodging) bookkeeping. PlayerInput itself is private to
+        // Engine.PlayerController, so the edge flags and the double click state
+        // are mirrored here exactly like Engine.PlayerInput.PlayerInput and
+        // Engine.PlayerInput.CheckForDoubleClickMove do it.
+        t_eF = (t_wasF ^^ (aBaseY > 0));
+        t_eB = (t_wasB ^^ (aBaseY < 0));
+        t_eL = (t_wasL ^^ (aStrafe < 0));
+        t_eR = (t_wasR ^^ (aStrafe > 0));
+        t_wasF = (aBaseY > 0);
+        t_wasB = (aBaseY < 0);
+        t_wasL = (aStrafe < 0);
+        t_wasR = (aStrafe > 0);
+        DoubleClickMove = TP_DblClickMove( 1.1*DeltaTime/Level.TimeDilation );
+
+        GroundPitch = 0;
+        ViewRotation = Rotation;
+        if ( Pawn.Physics == PHYS_Walking )
+        {
+            // tell pawn about any direction changes to give it a chance to play appropriate animation
+            //if walking, look up/down stairs - unless player is rotating view
+             if ( (bLook == 0)
+                && (((Pawn.Acceleration != Vect(0,0,0)) && bSnapToLevel) || !bKeyboardLook) )
+            {
+                if ( bLookUpStairs || bSnapToLevel )
+                {
+                    GroundPitch = FindStairRotation(deltaTime);
+                    ViewRotation.Pitch = GroundPitch;
+                }
+                else if ( bCenterView )
+                {
+                    ViewRotation.Pitch = ViewRotation.Pitch & 65535;
+                    if (ViewRotation.Pitch > 32768)
+                        ViewRotation.Pitch -= 65536;
+                    ViewRotation.Pitch = ViewRotation.Pitch * (1 - 12 * FMin(0.0833, deltaTime));
+                    if ( (Abs(ViewRotation.Pitch) < 250) && (ViewRotation.Pitch < 100) )
+                        ViewRotation.Pitch = -249;
+                }
+            }
+        }
+        else
+        {
+            if ( !bKeyboardLook && (bLook == 0) && bCenterView )
+            {
+                ViewRotation.Pitch = ViewRotation.Pitch & 65535;
+                if (ViewRotation.Pitch > 32768)
+                    ViewRotation.Pitch -= 65536;
+                ViewRotation.Pitch = ViewRotation.Pitch * (1 - 12 * FMin(0.0833, deltaTime));
+                if ( (Abs(ViewRotation.Pitch) < 250) && (ViewRotation.Pitch < 100) )
+                    ViewRotation.Pitch = -249;
+            }
+        }
+        Pawn.CheckBob(DeltaTime, Y);
+
+        // Update rotation.
+        SetRotation(ViewRotation);
+        OldRotation = Rotation;
+        UpdateRotation(DeltaTime, 1);
+        bDoubleJump = false;
+
+        if ( bPressedJump && Pawn.CannotJumpNow() )
+        {
+            bSaveJump = true;
+            bPressedJump = false;
+        }
+        else
+            bSaveJump = false;
+
+        if ( Role < ROLE_Authority ) // then save this move and replicate it
+            ReplicateMove(DeltaTime, NewAccel, DoubleClickMove, OldRotation - Rotation);
+        else
+            ProcessMove(DeltaTime, NewAccel, DoubleClickMove, OldRotation - Rotation);
+        bPressedJump = bSaveJump;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -435,12 +498,33 @@ function TP_CalcCam( out vector CamLoc, out rotator CamRot )
 
     CamLoc = Anchor - FreeDist * Dir;
 
+    // convergence ray for the reticle & AdjustAim. The camera sits on the
+    // view line (the pull-in moves along the view direction), so tracing from
+    // the anchor along the camera direction IS the true crosshair ray.
+    t_camOrigin = CamLoc;
+    TP_CalcAimPoint( Anchor, Dir );
+
     if ( tp_debug && !t_camLogged )
     {
         t_camLogged = true;
         Log( "GTA-TP: camera active dist="$t_camDist
              $" shoulder="$t_camShoulder$" height="$t_camHeight );
     }
+}
+
+// Real crosshair ray: what the camera ray hits in the world becomes the point
+// where the bullets/projectiles converge. Pawn.Trace excludes the pawn itself.
+// Range 10000 matches the stock AdjustAim instant-hit trace.
+function TP_CalcAimPoint( vector Origin, vector Dir )
+{
+    local actor  Hit;
+    local vector HitLoc, HitNormal;
+
+    Hit = Pawn.Trace( HitLoc, HitNormal, Origin + 10000.0 * Dir, Origin, true );
+    if ( Hit != None )
+        t_aimPoint = HitLoc;
+    else
+        t_aimPoint = Origin + 10000.0 * Dir;
 }
 
 // Room check while we are already in first person because of the auto-FP lock
@@ -511,12 +595,80 @@ function float TP_FEase( float Current, float Target, float dt )
 }
 
 // ---------------------------------------------------------------------------
-// shots stay on the crosshair in third person
+// reticle & shots
 // ---------------------------------------------------------------------------
-// Copy of the stock PlayerController.AdjustAim with one change: in third
-// person it returned Pawn.Rotation (yaw only, pitch zeroed while walking),
-// which put shots off the crosshair. We return the controller Rotation
-// (the camera direction) instead. The aiming help (target scanning) is stock.
+
+// Conditions under which the third person view owns the crosshair: the stock
+// centre crosshair is suppressed (myHUD.bCrosshairShow, like the stock
+// screenshot mode) and our convergence dot is drawn instead. Also gates the
+// AdjustAim convergence.
+simulated function bool TP_ShootConvergence()
+{
+    return tp_enable && bBehindView && !t_fpLock && (Pawn != None)
+           && (Vehicle(Pawn) == None) && (Pawn.Health > 0);
+}
+
+// Called by the GTAInteraction overlay each frame it renders.
+simulated function bool TP_WantsReticle( out vector AimPoint )
+{
+    if ( !TP_ShootConvergence() )
+        return false;
+    AimPoint = t_aimPoint;
+    return true;
+}
+
+function TP_AddReticle()
+{
+    local Player VP;
+    local int i;
+
+    VP = Player;
+    if ( VP == None || VP.InteractionMaster == None )
+        return;
+
+    for ( i = 0; i < VP.LocalInteractions.Length; i++ )
+        if ( GTAInteraction(VP.LocalInteractions[i]) != None )
+            return;    // ours already survives from an earlier map
+
+    VP.InteractionMaster.AddInteraction( "GTAThirdPerson.GTAInteraction", VP );
+    if ( tp_debug )
+        Log( "GTA-TP: reticle interaction registered" );
+}
+
+// Keeps the stock crosshair hidden exactly while our reticle is drawn.
+function TP_UpdateCrosshair()
+{
+    local bool bActive;
+
+    if ( myHUD == None )
+    {
+        t_crossSuppressed = false;
+        return;
+    }
+
+    bActive = TP_ShootConvergence();
+
+    if ( t_crossSuppressed && !bActive )
+    {
+        myHUD.bCrosshairShow = t_crossSaved;
+        t_crossSuppressed    = false;
+    }
+    else if ( bActive && !t_crossSuppressed )
+    {
+        t_crossSaved         = myHUD.bCrosshairShow;
+        myHUD.bCrosshairShow = false;
+        t_crossSuppressed    = true;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// AdjustAim: stock copy, with third person switching to reticle convergence
+// ---------------------------------------------------------------------------
+// First person keeps the full stock behaviour (scanning/aiming help included).
+// Third person returns the direction from the fire origin to the point the
+// camera ray hit (t_aimPoint): the shot origin still is the pawn's muzzle/eye,
+// but it is aimed AT the reticle, so the shoulder offset and the look pitch
+// cannot introduce parallax any more. This is the hl-thirdperson aim fix.
 function rotator AdjustAim( FireProperties FiredAmmunition, vector projStart, int aimerror )
 {
     local vector FireDir, AimSpot, HitNormal, HitLocation, OldAim, AimOffset;
@@ -525,6 +677,9 @@ function rotator AdjustAim( FireProperties FiredAmmunition, vector projStart, in
     local actor HitActor;
     local bool bNoZAdjust, bLeading;
     local rotator AimRot;
+
+    if ( TP_ShootConvergence() )
+        return rotator( t_aimPoint - projStart );
 
     FireDir = vector(Rotation);
     if ( FiredAmmunition.bInstantHit )
@@ -679,10 +834,10 @@ exec function TP_Info()
          $" shoulder="$tp_shoulder
          $" height="$tp_height
          $" aim="$bTPAim
-         $" bodyOff="$t_bodyYawOffset
+         $" bodyYaw="$t_bodyYaw
+         $" bodyTarget="$t_bodyTargetYaw
          $" fpLock="$t_fpLock
-         $" behind="$bBehindView
-         $" bone="$tp_bone );
+         $" behind="$bBehindView );
 }
 
 // ============================================================================
@@ -707,8 +862,6 @@ defaultproperties
      tp_auto_fp=True
      tp_fp_in=20.000000
      tp_fp_out=35.000000
-     tp_bone=Bip01
-     tp_bonespace=1
      tp_bindver=0
      tp_debug=False
      tp_autobind=True

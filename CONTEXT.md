@@ -157,3 +157,68 @@ camera works; the failures were specific:
 - UnrealScript details: ternaries on int assignments rejected by the UT2004
   compiler ("Type mismatch in '='"); use if/else.
 - Rebuilt, reinstalled, `ucc server` smoke clean. Awaiting retest.
+
+### 2026-10-22 — playtest round 2 (user) + facing/reticle rewrite
+
+User report: (1) body still ALWAYS faces the crosshair in both aim modes (the
+bone cosmetic turn never showed), (2) reticle accuracy degrades with shoulder
+offset and vertical look — bullets converge off the reticle because they
+actually originate at the pawn's eyes, not at the screen centre.
+
+- **Bone cosmetic turn abandoned**. The `SetBoneRotation`/`GetBoneRotation`
+  probe was self-referential: setting a rotation in space S and reading it
+  back in space S "passes" for ANY (bone, space) pair with no evidence the
+  *rendered mesh* rotates (log: `probe: bone='Bip01' space=1` while the user
+  still saw a fixed body). Stock code never applies per-frame bone rotations
+  to player pawns either — no ground truth to copy.
+- **Physical pawn facing instead**: our `UpdateRotation` override runs
+  `Super` (camera/input/shake/pitch limit + stock pawn facing) and then calls
+  `Pawn.FaceRotation(bodyRot, dt)` with the GTA body target — absolute yaw,
+  eased by `tp_turnspeed`: movement direction while running, crosshair while
+  firing/`TP_AimMode`, last value while idle (camera orbits the body). Gated
+  to PHYS_Walking/Falling/Swimming; ladder/spider/vehicle/death/FP keep stock
+  facing. The pawn rotation is physical & replicated, so anims, bots and other
+  players all agree (better than the bone hack would ever be).
+- **Movement re-based on camera axes**: stock `PlayerWalking.PlayerMove`
+  builds acceleration from `GetAxes(Pawn.Rotation)` — with the pawn facing the
+  movement direction that input becomes self-referential, so the state is
+  copied verbatim with the basis switched to `GetAxes(Rotation)`. Verified the
+  other states (PlayerSwimming 5050, PlayerClimbing 4619, PlayerSpidering) are
+  ALREADY camera-relative in stock code — no copies needed. ProcessMove (dodge
+  handling, UnrealPlayer) and NotifyLanded resolve through class-major state
+  lookup because the same state name is reused (this is exactly the pattern
+  UnrealPlayer itself uses).
+- **PlayerInput is `private`** to Engine.PlayerController →
+  `CheckForDoubleClickMove` unreachable from a subclass. The input-edge
+  bookkeeping (bEdge*/bWas* XOR of aBaseY/aStrafe, PlayerInput.uc:54-61) and
+  CheckForDoubleClickMove (275-340) are mirrored in the controller with own
+  state vars (`TP_DblClickMove`), `DoubleClickTime` read from the PlayerInput
+  defaults. Dodging/double-jump still work.
+- **Convergence aim (parallax fix)**: each camera frame, `TP_CalcCam` traces
+  the true crosshair ray (origin on the view line — anchor and pulled-in
+  camera sit on the same line, Pawn.Trace so the pawn is not self-hit —
+  direction = camera direction, range 10000 like stock AdjustAim) and stores
+  it in `t_aimPoint`. The `AdjustAim` copy now returns
+  `rotator(t_aimPoint - projStart)` while in third person: shots start at the
+  real muzzle/eyes but AIM AT the reticle point, so shoulder offset or
+  looking straight up/down can never displace the impact. Verified beam
+  weapons (LinkFire 53/166/183...) also route through AdjustAim. First person
+  keeps the full stock AdjustAim (scanning/aiming help).
+- **Black & white dot reticle**: new class `GTAThirdPerson.GTAInteraction
+  extends Engine.Interaction` — Interactions get PostRender + a per-viewport
+  registry (`Player.InteractionMaster.AddInteraction(id, Player)`,
+  InteractionMaster.uc) and natives `Canvas.WorldToScreen`. It draws a white
+  core with a black outline (two tiles of Engine.WhiteSquareTexture, the same
+  solid-box pattern Engine/Canvas.uc:161 uses) at `WorldToScreen(t_aimPoint)`,
+  with a behind-camera check (dot(ViewDir) like HudBase.DrawTargeting:821+).
+  Added once per viewport (scans `Player.LocalInteractions` — interactions
+  survive map changes). The stock centre crosshair is hidden while the
+  reticle is up by setting `myHUD.bCrosshairShow=false` and restoring the
+  user value on disable — identical to stock screenshot mode
+  (PlayerController.uc:727-739).
+- Compile notes: `Outer` is an intrinsic Object property (don't name locals
+  that); `ERenderStyle` is scoped inside Actor and not reachable from an
+  Interaction (Object subtree) — Canvas.Style defaults to 1 (STY_Normal)
+  anyway, so no assignment needed.
+- Rebuilt (0 errors), reinstalled, `ucc server` smoke clean (mutator listed,
+  no script errors). Awaiting playtest round 3.
