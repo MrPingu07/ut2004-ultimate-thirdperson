@@ -592,3 +592,17 @@ player enters third person on join, (b) orbit/keys work, (c) shots behave
 (stock-style convergence for remote, crosshair-true for host).
 
 README gained a Multiplayer section (requirements + the remote-aim limit).
+
+### 2026-10-23 — v1.0 published
+
+Repo: https://github.com/MrPingu07/ut2004-ultimate-thirdperson (public, gh CLI,
+pushed master + tag v1.0, release v1.0 with single-file zip).
+
+Packaging: tools/package.sh [ver] stages INSTALL.txt + System/GTAThirdPerson
+.{u,int,ucl} and zips to dist/ (gitignored; no `zip` binary on this box — the
+script uses python3 zipfile). Users extract the zip into the UT2004 root.
+GPLv3: LICENSE + short GPL headers in both .uc sources; README renamed to
+"UT2004 Ultimate ThirdPerson", one-step zip install section + license section;
+.gitignore gained dist/. Multiplayer section already in README; MP playtest +
+the pending publish questions (license visibility) resolved by user's call:
+public + GPLv3.
