@@ -120,6 +120,9 @@ resolves the class — verified against the stock sources).
   `Pawn.FaceRotation` (the pawn's real physical rotation, so animations match
   and other players/bots see the correct facing). Only walking/falling/swimming
   physics get this; ladders, spider mode and vehicles keep stock behaviour.
+  The stock `bFreeCamera` flag is set (on foot only) so stock UpdateRotation
+  skips its own pawn-facing and does not fight us; inside vehicles it is left
+  FALSE so turrets (ONSWeaponPawn seats) keep their stock mouse-driven swivel.
   Because the pawn no longer faces the camera, `state PlayerWalking.PlayerMove`
   is copied with its acceleration basis switched from `Pawn.Rotation` to the
   controller `Rotation` (with the **pitch stripped** — otherwise looking 90°
