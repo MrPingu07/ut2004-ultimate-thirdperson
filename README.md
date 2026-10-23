@@ -13,16 +13,14 @@ body turns cosmetically towards the movement direction.
 - **Free character facing (GTA-style)**: the body is decoupled from the mouse —
   it turns towards the movement direction with a configurable speed (`tp_turnspeed`),
   locks to the crosshair while firing or in aim mode, and stays put while you
-  orbit the camera standing still. The camera-relative input handling is
-  re-based on the camera axes for walking, so you always move where the
-  camera points, regardless of where the body looks.
-- **True reticle**: in third person the stock centre crosshair is replaced by a
-  black & white dot drawn on a ray traced from the camera perspective through
-  the screen centre (the real shot convergence point) — bullets originate from
-  the pawn's eyes but are aimed **at** the dot, so shoulder offset and looking
-  straight up/down never introduce parallax.
-- Camera-relative movement and crosshair-true shots (including **shot pitch**;
-  see *How it works* below — stock UT2004 behind view loses pitch).
+  orbit the camera standing still. The walking input is re-based on the camera
+  axes (pitch-free) so you always move where the camera points, no matter where
+  the body looks.
+- **Crosshair-true shots, no parallax**: shots leave the pawn's eyes but are
+  aimed at the point the camera ray hits (traced up to 10000 units), so the
+  shoulder offset and looking straight up/down never displace the impact. The
+  stock (custom player-chosen) crosshair keeps working unchanged — the
+  convergence point always projects to the screen centre.
 - Full vertical look (stock UE2 camera pitch, ~90°).
 - **Automatic first person** when there is no room behind the character (walking
   backwards into a wall), back to third person when there is (with hysteresis).
@@ -124,21 +122,20 @@ resolves the class — verified against the stock sources).
   physics get this; ladders, spider mode and vehicles keep stock behaviour.
   Because the pawn no longer faces the camera, `state PlayerWalking.PlayerMove`
   is copied with its acceleration basis switched from `Pawn.Rotation` to the
-  controller `Rotation` — the other movement states (swimming, climbing,
-  spider) already use the controller axes in stock code. The double-click
-  dodge bookkeeping is mirrored too (`PlayerInput` is private to the stock
-  controller class).
-- **Aim ray / reticle**: every camera frame we trace the true crosshair ray
+  controller `Rotation` (with the **pitch stripped** — otherwise looking 90°
+  down makes the forward axis vertical and forward/back movement collapses;
+  this is how the stock camera-pitch ~90° is kept for looking, not moving).
+  The other movement states (swimming, climbing, spider) already use the
+  controller axes in stock code. The double-click dodge bookkeeping is
+  mirrored too (`PlayerInput` is private to the stock controller class).
+- **Aim ray (convergence)**: every camera frame we trace the true crosshair ray
   (camera origin along `vector(Rotation)`, 10000 units, actors enabled) into
-  the world — that intersection is the `t_aimPoint`. `AdjustAim` returns the
+  the world — that intersection is `t_aimPoint`. `AdjustAim` returns the
   direction from the real fire origin (pawn's muzzle/eyes) to `t_aimPoint`, so
-  shots converge on the reticle exactly (no parallax from the shoulder offset
-  or look pitch); `AdjustAim` also fixes stock third person losing shot pitch.
-  A local `Interaction` (`GTAThirdPerson.GTAInteraction`, registered through
-  `Player.InteractionMaster.AddInteraction`, one instance per viewport that
-  survives map changes) draws a black & white dot at that point with
-  `Canvas.WorldToScreen` while the stock centre crosshair is hidden
-  (`myHUD.bCrosshairShow`, the same mechanism stock uses for screenshot mode).
+  shots converge on the crosshair exactly (no parallax from the shoulder
+  offset or look pitch); `AdjustAim` also fixes stock third person losing
+  shot pitch. Because the ray ends on the screen centre, the stock (custom
+  player-chosen) crosshair stays valid and no HUD replacement is needed.
 
 Known limitations: first-person `AdjustAim` scanning (aiming help) is stock
 and only active in first person; thrown weapons keep stock yaw behaviour; not

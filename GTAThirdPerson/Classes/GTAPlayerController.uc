@@ -19,9 +19,9 @@
 //  - Shots: while in third person we compute the real crosshair ray (camera
 //    origin along vector(Rotation)) and trace it into the world; the result
 //    (t_aimPoint) is used by AdjustAim so bullets/projectiles converge on the
-//    reticle regardless of the shoulder offset or the look pitch (parallax fix).
-//  - Reticle: a local Interaction (GTAInteraction) draws a black & white dot
-//    at t_aimPoint via WorldToScreen, replacing the stock centre crosshair.
+//    crosshair regardless of the shoulder offset or the look pitch (parallax fix).
+//    Since the ray always ends at the screen centre the stock (custom player)
+//    crosshair stays visible and needs no replacement overlay.
 //=============================================================================
 class GTAPlayerController extends xPlayer
     config(GTAThirdPerson);
@@ -59,13 +59,12 @@ var transient bool  t_fpLock;
 var transient float t_lastCamCalc;
 var transient bool  t_camLogged;
 var transient bool  t_unlockLogged;
-var transient vector t_aimPoint;         // convergence/reticle point (world)
+var transient vector t_aimPoint;         // convergence point of the shots (world)
 var transient vector t_camOrigin;        // camera origin of the last view
-var transient bool  t_crossSuppressed;   // stock crosshair currently hidden
-var transient bool  t_crossSaved;        // user crosshair setting to restore
 var transient bool  t_eF, t_eB, t_eL, t_eR, t_wasF, t_wasB, t_wasL, t_wasR;
 var transient eDoubleClickDir t_dblDir;  // our copy of PlayerInput's double click state
 var transient float t_dblTimer;          // (PlayerInput is private to Engine.PlayerController)
+var transient float t_lastBodyLog;       // debug: body facing log throttle
 
 const TP_BINDVERSION = 2;
 
@@ -122,12 +121,7 @@ function Possess( Pawn aPawn )
     t_camLogged       = false;
     t_unlockLogged    = false;
 
-    // a fresh HUD instance is spawned per game, so re-apply suppression next tick
-    t_crossSuppressed = false;
-
-    // register the black & white dot reticle overlay (once per viewport; the
-    // interaction object persists across maps, so duplicates are checked)
-    TP_AddReticle();
+    // a fresh HUD shows the user's own crosshair again
 
     if ( tp_debug )
         Log( "GTA-TP: Possess pawn="$aPawn$" controller="$Class
@@ -138,7 +132,6 @@ function Possess( Pawn aPawn )
 simulated event PlayerTick( float DeltaTime )
 {
     Super.PlayerTick( DeltaTime );
-    TP_UpdateCrosshair();
 }
 
 // ---------------------------------------------------------------------------
@@ -152,6 +145,11 @@ simulated event PlayerTick( float DeltaTime )
 function UpdateRotation( float DeltaTime, float maxPitch )
 {
     Super.UpdateRotation( DeltaTime, maxPitch );
+
+    // prove-once that this override really runs from our state copy
+    if ( tp_debug && !t_camLogged )
+        Log( "GTA-TP: our UpdateRotation override is running (dt="$DeltaTime$")" );
+
     TP_FaceBody( DeltaTime );
 }
 
@@ -164,6 +162,22 @@ simulated function TP_FaceBody( float dt )
     local float    Diff, Step;
 
     P = Pawn;
+    if ( tp_debug && (P != None) && ((Level.TimeSeconds - t_lastBodyLog) > 1.0) )
+    {
+        t_lastBodyLog = Level.TimeSeconds;
+        Log( "GTA-TP: body gate enable="$tp_enable
+             $" behind="$bBehindView
+             $" fpLock="$t_fpLock
+             $" alive="$((P.Health > 0))
+             $" veh="$(Vehicle(P) != None)
+             $" phys="$P.Physics
+             $" camYaw="$Rotation.Yaw
+             $" pawnYaw="$P.Rotation.Yaw
+             $" bodyYaw="$t_bodyYaw
+             $" target="$t_bodyTargetYaw
+             $" valid="$t_bodyTargetValid );
+    }
+
     if ( !tp_enable || !bBehindView || t_fpLock )
         return;    // first person: stock facing applies
 
@@ -307,7 +321,7 @@ state PlayerWalking
     {
         local vector X,Y,Z, NewAccel;
         local eDoubleClickDir DoubleClickMove;
-        local rotator OldRotation, ViewRotation;
+        local rotator OldRotation, ViewRotation, CamYaw;
         local bool  bSaveJump;
 
         if( Pawn == None )
@@ -316,7 +330,14 @@ state PlayerWalking
             return;
         }
 
-        GetAxes(Rotation,X,Y,Z);   // GTA-TP: camera basis, not the pawn facing
+        // GTA-TP: movement is re-based on the CAMERA axes (the pawn faces the
+        // movement direction, not the camera), but with the pitch removed: at
+        // full look up/down the pitched X axis would collapse into Z and kill
+        // forward/back movement entirely (walking has no vertical accel).
+        CamYaw.Pitch = 0;
+        CamYaw.Yaw   = Rotation.Yaw;
+        CamYaw.Roll  = 0;
+        GetAxes(CamYaw,X,Y,Z);
 
         // Update acceleration.
         NewAccel = aForward*X + aStrafe*Y;
@@ -595,79 +616,24 @@ function float TP_FEase( float Current, float Target, float dt )
 }
 
 // ---------------------------------------------------------------------------
-// reticle & shots
+// shots
 // ---------------------------------------------------------------------------
 
-// Conditions under which the third person view owns the crosshair: the stock
-// centre crosshair is suppressed (myHUD.bCrosshairShow, like the stock
-// screenshot mode) and our convergence dot is drawn instead. Also gates the
-// AdjustAim convergence.
+// Conditions under which the third person convergence aim is active (shots
+// are aimed at the point the camera ray hits, t_aimPoint).
 simulated function bool TP_ShootConvergence()
 {
     return tp_enable && bBehindView && !t_fpLock && (Pawn != None)
            && (Vehicle(Pawn) == None) && (Pawn.Health > 0);
 }
 
-// Called by the GTAInteraction overlay each frame it renders.
-simulated function bool TP_WantsReticle( out vector AimPoint )
-{
-    if ( !TP_ShootConvergence() )
-        return false;
-    AimPoint = t_aimPoint;
-    return true;
-}
-
-function TP_AddReticle()
-{
-    local Player VP;
-    local int i;
-
-    VP = Player;
-    if ( VP == None || VP.InteractionMaster == None )
-        return;
-
-    for ( i = 0; i < VP.LocalInteractions.Length; i++ )
-        if ( GTAInteraction(VP.LocalInteractions[i]) != None )
-            return;    // ours already survives from an earlier map
-
-    VP.InteractionMaster.AddInteraction( "GTAThirdPerson.GTAInteraction", VP );
-    if ( tp_debug )
-        Log( "GTA-TP: reticle interaction registered" );
-}
-
-// Keeps the stock crosshair hidden exactly while our reticle is drawn.
-function TP_UpdateCrosshair()
-{
-    local bool bActive;
-
-    if ( myHUD == None )
-    {
-        t_crossSuppressed = false;
-        return;
-    }
-
-    bActive = TP_ShootConvergence();
-
-    if ( t_crossSuppressed && !bActive )
-    {
-        myHUD.bCrosshairShow = t_crossSaved;
-        t_crossSuppressed    = false;
-    }
-    else if ( bActive && !t_crossSuppressed )
-    {
-        t_crossSaved         = myHUD.bCrosshairShow;
-        myHUD.bCrosshairShow = false;
-        t_crossSuppressed    = true;
-    }
-}
-
 // ---------------------------------------------------------------------------
-// AdjustAim: stock copy, with third person switching to reticle convergence
+// AdjustAim: stock copy, with third person switching to crosshair convergence
 // ---------------------------------------------------------------------------
 // First person keeps the full stock behaviour (scanning/aiming help included).
 // Third person returns the direction from the fire origin to the point the
 // camera ray hit (t_aimPoint): the shot origin still is the pawn's muzzle/eye,
-// but it is aimed AT the reticle, so the shoulder offset and the look pitch
+// but it is aimed AT the crosshair, so the shoulder offset and the look pitch
 // cannot introduce parallax any more. This is the hl-thirdperson aim fix.
 function rotator AdjustAim( FireProperties FiredAmmunition, vector projStart, int aimerror )
 {

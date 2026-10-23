@@ -222,3 +222,41 @@ actually originate at the pawn's eyes, not at the screen centre.
   anyway, so no assignment needed.
 - Rebuilt (0 errors), reinstalled, `ucc server` smoke clean (mutator listed,
   no script errors). Awaiting playtest round 3.
+
+### 2026-10-22 — playtest round 3 (user) + pitch fix + crosshair restore + body instrumentation
+
+User report: (1) aim much better now — shots land on the reticle, BUT (2) the
+black & white dot never moves from the screen centre: it projects there by
+CONSTRUCTION (the convergence ray goes THROUGH the screen centre), so the user
+asks for their own custom HUD crosshair back instead; (3) body STILL does not
+rotate, not even a little; (4) NEW BUG: looking exactly 90° up/down kills
+forward/back movement (only A/D works).
+
+Fixes/changes:
+
+- **Overlay removed, stock crosshair restored**: the dot was pointless (the
+  convergence ray always ends on the screen centre), so `GTAInteraction` was
+  deleted, crosshair suppression (myHUD.bCrosshairShow) is gone entirely, and
+  the user's own HUD crosshair texture shows again. The CONVERGENCE aim stays
+  (TP_CalcAimPoint + AdjustAim branch — user confirms the accuracy improved).
+  Design note: an off-centre reticle would have to project the MUZZLE
+  trajectory rather than the camera ray — a different design; the user
+  accepted the centre-crosshair solution.
+- **90° look movement bug (confirmed)**: our camera-based walking accel used
+  the FULL camera rotation; at pitch ±16384 the X axis ≈ (0,0,±1), so
+  `NewAccel.Z = 0` removed everything and W/S went dead (stock never sees this
+  because it uses the pitch-zeroed pawn rotation). Fix: basis now built from
+  `CamYaw = Rotation` with Pitch=0 (yaw-only). Swimming state keeps stock
+  behaviour (unchanged).
+- **Body rotation still not rendering — instrumented debug** (tp_debug):
+  `UpdateRotation` logs once that the override runs; `TP_FaceBody` logs once
+  per second: gate fields (enable/behind/fpLock/alive/veh/physics) plus
+  camYaw / pawnYaw / bodyYaw / target / valid. When we get the user's log we
+  can see whether (a) the override never runs, (b) a gate kills it, or
+  (c) FaceRotation applies but something reverts the pawn yaw.
+  Verified against stock: no pawn class (UnrealPawn/xPawn) overrides
+  FaceRotation or SetRotation; xPawn sets bRotateToDesired=False (1280, 2378);
+  Pawn.FaceRotation (1283) just zeroes pitch & SetRotation; the only
+  FaceRotation call site in the controller chain is inside UpdateRotation,
+  which we override.
+- Rebuilt (0 errors), reinstalled, `ucc server` smoke clean.
