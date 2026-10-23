@@ -131,6 +131,13 @@ resolves the class — verified against the stock sources).
   The other movement states (swimming, climbing, spider) already use the
   controller axes in stock code. The double-click dodge bookkeeping is
   mirrored too (`PlayerInput` is private to the stock controller class).
+- **Vehicle reticles are muted** (round 6): stock Onslaught draws its own
+  second screen-centred reticle in ONS vehicles/turrets once the cannon aligns
+  with the camera (`bCorrectAim`). Per instance we zero the stock
+  `CrosshairX/CrosshairY` offsets, shrinking that draw to a 1px dot hidden
+  under the player crosshair; the player's own custom crosshair is the only
+  visible one everywhere. The mounted gun follow of round 5 (per-tick
+  `bFreeCamera`) is unaffected.
 - **Aim ray (convergence)**: every camera frame we trace the true crosshair ray
   (camera origin along `vector(Rotation)`, 10000 units, actors enabled) into
   the world — that intersection is `t_aimPoint`. `AdjustAim` returns the
