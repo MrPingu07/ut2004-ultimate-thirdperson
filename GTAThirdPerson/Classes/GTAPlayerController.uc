@@ -45,6 +45,7 @@ var config bool  tp_auto_fp;        // auto first person when there is no room b
 var config float tp_fp_in;          // free space below which it switches to first person
 var config float tp_fp_out;         // free space from which it returns to third person
 var config int   tp_bindver;        // internal: version of the default binds already applied
+var config int   tp_turnver;        // internal: version of the tp_turnspeed migration
 var config bool  tp_debug;          // logs install details once per game (for playtesting)
 var config bool  tp_autobind;       // 0 = never overwrite existing key binds; 1 = force default binds once
 
@@ -65,8 +66,10 @@ var transient bool  t_eF, t_eB, t_eL, t_eR, t_wasF, t_wasB, t_wasL, t_wasR;
 var transient eDoubleClickDir t_dblDir;  // our copy of PlayerInput's double click state
 var transient float t_dblTimer;          // (PlayerInput is private to Engine.PlayerController)
 var transient float t_lastBodyLog;       // debug: body facing log throttle
+var transient float t_lastApplyLog;      // debug: rotation-applied log throttle
 
 const TP_BINDVERSION = 2;
+const TP_TURNVERSION = 2;
 
 simulated event PostBeginPlay()
 {
@@ -78,6 +81,19 @@ simulated event PostBeginPlay()
     // `KEYBINDING <key>` — that is what we use here.
     if ( tp_bindver < TP_BINDVERSION )
         TP_SetDefaultBinds();
+
+    // tp_turnspeed was written as 1 by an old TP_SetTurnSpeed 0 (clamped to
+    // the minimum) while the cosmetic bone turn debugging was going on; with
+    // the physical body rotation that value made the turn invisible. Reset
+    // once, versioned, like tp_bindver.
+    if ( tp_turnver < TP_TURNVERSION )
+    {
+        tp_turnspeed = 3600.0;
+        tp_turnver   = TP_TURNVERSION;
+        SaveConfig();
+        if ( tp_debug )
+            Log( "GTA-TP: tp_turnspeed reset to 3600 (values below 30 were unusable)" );
+    }
 }
 
 exec function TP_SetDefaultBinds()   // re-runable fix for the keybinds
@@ -162,17 +178,17 @@ simulated function TP_FaceBody( float dt )
     local float    Diff, Step;
 
     P = Pawn;
-    if ( tp_debug && (P != None) && ((Level.TimeSeconds - t_lastBodyLog) > 1.0) )
+    if ( tp_debug && (P != None) && ((Level.TimeSeconds - t_lastBodyLog) > 0.25) )
     {
         t_lastBodyLog = Level.TimeSeconds;
-        Log( "GTA-TP: body gate enable="$tp_enable
+        Log( "GTA-TP: body enable="$tp_enable
              $" behind="$bBehindView
              $" fpLock="$t_fpLock
-             $" alive="$((P.Health > 0))
+             $" freedCam="$bFreeCamera
              $" veh="$(Vehicle(P) != None)
              $" phys="$P.Physics
              $" camYaw="$Rotation.Yaw
-             $" pawnYaw="$P.Rotation.Yaw
+             $" pawnYawPre="$P.Rotation.Yaw
              $" bodyYaw="$t_bodyYaw
              $" target="$t_bodyTargetYaw
              $" valid="$t_bodyTargetValid );
@@ -223,6 +239,14 @@ simulated function TP_FaceBody( float dt )
     BodyRot.Yaw   = int(TP_YawShort( t_bodyYaw )) & 65535;
     BodyRot.Roll  = 0;
     P.FaceRotation( BodyRot, dt );
+
+    if ( tp_debug && (Level.TimeSeconds - t_lastApplyLog) > 1.0 )
+    {
+        t_lastApplyLog = Level.TimeSeconds;
+        Log( "GTA-TP: body apply target="$t_bodyTargetYaw
+             $" eased="$BodyRot.Yaw
+             $" pawnYawAfter="$P.Rotation.Yaw );
+    }
 }
 
 function float TP_YawShort( float Diff )
@@ -584,6 +608,12 @@ function TP_SetCamParams( float dt )
 {
     local float D, S, H;
 
+    // Stock flag: while set, Engine.PlayerController.UpdateRotation skips
+    // Pawn.FaceRotation(camera) for behindview players (line ~4406 in the
+    // stock source), which would instantly undo our body rotation tick by
+    // tick. The pawn facing is then managed solely by TP_FaceBody.
+    bFreeCamera = tp_enable && bBehindView && !t_fpLock;
+
     if ( bTPAim )
     {
         D = tp_aim_dist;
@@ -829,6 +859,7 @@ defaultproperties
      tp_fp_in=20.000000
      tp_fp_out=35.000000
      tp_bindver=0
+     tp_turnver=0
      tp_debug=False
      tp_autobind=True
 }

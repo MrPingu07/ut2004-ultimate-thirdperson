@@ -260,3 +260,47 @@ Fixes/changes:
   FaceRotation call site in the controller chain is inside UpdateRotation,
   which we override.
 - Rebuilt (0 errors), reinstalled, `ucc server` smoke clean.
+
+### 2026-10-22 — playtest round 4 (user) + smoking guns from the debug log
+
+User report: crosshair custom + accurate (GOOD), body rotation STILL invisible.
+
+Debug log analysis (the user's clean-exit UT2004.log, 68 throttled samples):
+
+- `our UpdateRotation override is running` every frame ✔ (the override chain
+  works — also proven earlier by the pitch movement bug being a symptom of
+  our PlayerMove copy running).
+- `body gate ...` samples: all gate fields fine (phys=1 walking, alive, no
+  vehicle, behind=True), the body target/easing code runs (bodyYaw progresses
+  from -4096 toward the movement target every line) — **AND THE EASING RATE
+  WAS ~69 rotator units per second ≈ `Step=1` per tick — the user's
+  `System/GTAThirdPerson.ini` has `tp_turnspeed=1.0`!!** Root cause of the
+  invisible turn from round 2 on: an early `TP_SetTurnSpeed 0` (issued while
+  the cosmetic bone approach was being debugged) was clamped by
+  `FMax(1.0, T)` and SavedConfig'd as `1` — 1 unit/tick ≈ 1°/s, nothing to
+  see. The user never re-raised it.
+- **AND** `pawnYaw == camYaw` EXACTLY on every sample, while bodyYaw lags
+  thousands of units behind — so a second mechanism also re-faces the pawn
+  to the camera every tick beyond tp_turnspeed.
+
+Fixes this round:
+1. **Config migration**: new `tp_turnver=2` (same pattern as tp_bindver):
+   on first possess, a saved `tp_turnspeed` below the version is reset to
+   3600 and SavedConfig'd (logged under tp_debug). Edit: PostBeginPlay.
+2. **bFreeCamera decoupling**: while the GTA camera is up,
+   `bFreeCamera = tp_enable && bBehindView && !t_fpLock` is set. Stock
+   `UpdateRotation` then SKIPS `Pawn.FaceRotation(camera)`
+   (Engine/PlayerController.uc:4406: `!bFreeCamera || !bBehindView`), so the
+   pawn facing is controlled solely by our TP_FaceBody → FaceRotation(body).
+   bFreeCamera returns to its config value when in FP. SET IN TP_SetCamParams
+   (already called every camera frame, so it self-restores on stance change).
+3. **Sharper diagnostics**: body debug now logs at 0.25 s and includes
+   `freedCam=` and `pawnYawPre=`; a second throttled line `body apply
+   ... pawnYawAfter=` logs immediately after FaceRotation. If the pawn yaw
+   STILL snaps back to camYaw with bFreeCamera enabled, the reverter is
+   native (physicsRotation per the Engine.dll symbol
+   `?physicsRotation@APawn@@UEAAXMVFVector@@`) and we take the native path
+   (pawn.bRotateToDesired + pawn.DesiredRotation = body target) or accept the
+   bFreeCamera's stock consequence.
+
+Rebuilt (0 errors), reinstalled, `ucc server` smoke clean.
