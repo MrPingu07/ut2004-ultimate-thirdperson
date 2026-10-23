@@ -388,3 +388,32 @@ camera stays still -> the rendered yaw does not come from Pawn.Rotation for
 the local player pawn and the next layer is the render path.
 
 Rebuilt (0 errors, 0 warnings), reinstalled, smoke clean.
+
+### 2026-10-23 — round 7: turn speed confirmed working by user — polish pass
+
+Round-7 report: **strafing visibly rotates the body** — the render pipeline was
+fine all along; it was slow. User-tested default: TP_SetTurnSpeed 250000
+rotator units/s (~1373 deg/s, ~3.8 rev/s) = the "visually attractive" GTA whip.
+No render-path work needed; TP_SpinTest probe answered its question.
+
+Polish implemented:
+
+1. **tp_turnspeed reinterpreted as DEGREES per second** (user: "remove the
+   zeros" — raw 65536-unit rotator numbers like 250000 are unwieldy):
+   - Compiled default 1373 deg/s (= the user-tested 250000 units/s).
+   - Versioned migration tp_turnver=3 converts any legacy units value once:
+     tp_turnspeed /= 182.044444 (1 deg = 65536/360 units), clamped [1, 2000].
+     Fresh installs skip it: defaultproperties now carry tp_turnver=3.
+   - TP_FaceBody Step = tp_turnspeed * dt * 182.044444 (the FMax(1.0) unit-era
+     floor removed); TP_SetTurnSpeed clamps [1, 10000] deg/s.
+2. **Debug bloat removed** (the mystery is solved, nothing left to observe):
+   - TP_SpinTest exec + t_spinTest + forced-spin branch (gone).
+   - 0.25 s "body enable/pawnYawPre/..." dump and 1 s "body apply" dump, with
+     t_lastBodyLog/t_lastApplyLog throttle vars (gone).
+   - one-shot "our UpdateRotation override is running" line (gone).
+   - Kept (tp_debug-gated, one-liners): Possess info, camera-active info,
+     room-recovered info, migration logs; TP_Info unchanged.
+
+Rebuilt (0 errors, 0 warnings), reinstalled, `ucc server` smoke clean. User's
+ini verified pre-state: tp_turnspeed=250000 + tp_turnver=2 → migrates to
+1373.3 deg/s on next possession.

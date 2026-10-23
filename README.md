@@ -138,6 +138,10 @@ resolves the class — verified against the stock sources).
   under the player crosshair; the player's own custom crosshair is the only
   visible one everywhere. The mounted gun follow of round 5 (per-tick
   `bFreeCamera`) is unaffected.
+- **Body turn speed is measured in degrees/second** (`tp_turnspeed`, default
+  1373 deg/s ~ 3.8 turns/s — a quick GTA-style whip; the config value converts
+  once to the new unit, since round<=6 stored raw engine rotator units). It
+  always eases over the shortest arc, so high values never spin the long way.
 - **Aim ray (convergence)**: every camera frame we trace the true crosshair ray
   (camera origin along `vector(Rotation)`, 10000 units, actors enabled) into
   the world — that intersection is `t_aimPoint`. `AdjustAim` returns the

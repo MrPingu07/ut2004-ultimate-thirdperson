@@ -10,12 +10,14 @@
 //  - Camera: PlayerCalcView() override builds an offset orbit camera; the
 //    controller Rotation stays the camera rotation, and every stock movement
 //    state except PlayerWalking is already camera-relative natively.
-//  - Body: the pawn's PHYSICAL rotation is decoupled from the camera. After
-//    the stock UpdateRotation faces the pawn at the camera, we rotate the pawn
-//    back towards the body target (movement direction, or the crosshair while
-//    aiming/firing) with FaceRotation. Because the pawn no longer faces the
-//    camera, walking input is re-based on the controller axes in our
-//    state PlayerWalking copy. No bone hacks, server-accurate facing.
+//  - Body: the pawn's PHYSICAL rotation is decoupled from the camera. The
+//    stock `bFreeCamera` flag (set per tick on foot only) keeps stock
+//    UpdateRotation from re-facing the pawn at the camera; TP_FaceBody then
+//    rotates the pawn towards the GTA body target (movement direction, or the
+//    crosshair while aiming/firing) with FaceRotation. Because the pawn no
+//    longer faces the camera, walking input is re-based on the controller
+//    axes in our state PlayerWalking copy. No bone hacks, server-accurate
+//    facing. Vehicles/turrets keep stock facing (and gun swivel).
 //  - Shots: while in third person we compute the real crosshair ray (camera
 //    origin along vector(Rotation)) and trace it into the world; the result
 //    (t_aimPoint) is used by AdjustAim so bullets/projectiles converge on the
@@ -31,7 +33,7 @@ var config bool  tp_enable;         // master switch (0 = stock first person)
 var config float tp_dist;           // camera distance
 var config float tp_shoulder;       // magnitude; sign sets side in every stance
 var config float tp_height;         // vertical camera offset (positive up)
-var config float tp_turnspeed;      // body turn speed, rotator units per second
+var config float tp_turnspeed;      // body turn speed, DEGREES per second (eased, shortest arc)
 var config float tp_easetime;       // easing time in seconds for shoulder/height/distance
 var config bool  tp_autoadjust;     // use the crouch values while crouching
 var config float tp_crouch_dist;
@@ -65,13 +67,10 @@ var transient vector t_camOrigin;        // camera origin of the last view
 var transient bool  t_eF, t_eB, t_eL, t_eR, t_wasF, t_wasB, t_wasL, t_wasR;
 var transient eDoubleClickDir t_dblDir;  // our copy of PlayerInput's double click state
 var transient float t_dblTimer;          // (PlayerInput is private to Engine.PlayerController)
-var transient float t_lastBodyLog;       // debug: body facing log throttle
-var transient float t_lastApplyLog;      // debug: rotation-applied log throttle
-var transient bool  t_spinTest;          // debug: force a continuous slow body spin
 var transient float t_lastReticleScan;   // throttle for the vehicle reticle mute scan
 
 const TP_BINDVERSION = 2;
-const TP_TURNVERSION = 2;
+const TP_TURNVERSION = 3;               // 3: tp_turnspeed reinterpreted as degrees/second
 
 simulated event PostBeginPlay()
 {
@@ -84,17 +83,18 @@ simulated event PostBeginPlay()
     if ( tp_bindver < TP_BINDVERSION )
         TP_SetDefaultBinds();
 
-    // tp_turnspeed was written as 1 by an old TP_SetTurnSpeed 0 (clamped to
-    // the minimum) while the cosmetic bone turn debugging was going on; with
-    // the physical body rotation that value made the turn invisible. Reset
-    // once, versioned, like tp_bindver.
+    // Round 7: tp_turnspeed is measured in DEGREES per second now. Existing
+    // configs (tp_turnver < 3) carry rotator-unit values (65536 = 360 deg),
+    // so convert once. The user-tested attractive default (~250000 units/s)
+    // lands at ~1373 deg/s, which is also the fresh-install default: fresh
+    // configs skip this branch via tp_turnver=3 in defaultproperties.
     if ( tp_turnver < TP_TURNVERSION )
     {
-        tp_turnspeed = 3600.0;
+        tp_turnspeed = FClamp( tp_turnspeed / 182.044444, 1.0, 2000.0 );
         tp_turnver   = TP_TURNVERSION;
         SaveConfig();
         if ( tp_debug )
-            Log( "GTA-TP: tp_turnspeed reset to 3600 (values below 30 were unusable)" );
+            Log( "GTA-TP: tp_turnspeed migrated to degrees per second ("$tp_turnspeed$" deg/s)" );
     }
 }
 
@@ -215,10 +215,6 @@ function UpdateRotation( float DeltaTime, float maxPitch )
 {
     Super.UpdateRotation( DeltaTime, maxPitch );
 
-    // prove-once that this override really runs from our state copy
-    if ( tp_debug && !t_camLogged )
-        Log( "GTA-TP: our UpdateRotation override is running (dt="$DeltaTime$")" );
-
     TP_FaceBody( DeltaTime );
 }
 
@@ -231,24 +227,6 @@ simulated function TP_FaceBody( float dt )
     local float    Diff, Step;
 
     P = Pawn;
-    // vehicles are stock-handled now (turret swivel runs in native/stock code
-    // once bFreeCamera is false) — no need to log them every 0.25 s
-    if ( tp_debug && (P != None) && (Vehicle(P) == None)
-         && ((Level.TimeSeconds - t_lastBodyLog) > 0.25) )
-    {
-        t_lastBodyLog = Level.TimeSeconds;
-        Log( "GTA-TP: body enable="$tp_enable
-             $" behind="$bBehindView
-             $" fpLock="$t_fpLock
-             $" freedCam="$bFreeCamera
-             $" veh="$(Vehicle(P) != None)
-             $" phys="$P.Physics
-             $" camYaw="$Rotation.Yaw
-             $" pawnYawPre="$P.Rotation.Yaw
-             $" bodyYaw="$t_bodyYaw
-             $" target="$t_bodyTargetYaw
-             $" valid="$t_bodyTargetValid );
-    }
 
     if ( !tp_enable || !bBehindView || t_fpLock )
         return;    // first person: stock facing applies
@@ -257,20 +235,6 @@ simulated function TP_FaceBody( float dt )
         return;
     if ( P.Physics != PHYS_Walking && P.Physics != PHYS_Falling && P.Physics != PHYS_Swimming )
         return;    // ladders, spider walls, etc: stock behaviour
-
-    // diagnostic: force a continuous ~88 deg/s spin regardless of movement.
-    // If the model does NOT visibly spin while this is on, the rendered yaw
-    // does not come from Pawn.Rotation and the render path needs a different
-    // approach; if it spins, the facing pipeline works end to end.
-    if ( t_spinTest )
-    {
-        t_bodyYaw = TP_YawShort( t_bodyYaw + 16000.0 * dt );
-        BodyRot.Pitch = 0;
-        BodyRot.Yaw   = int(TP_YawShort( t_bodyYaw )) & 65535;
-        BodyRot.Roll  = 0;
-        P.FaceRotation( BodyRot, dt );
-        return;
-    }
 
     bLock = bTPAim || (tp_fire_lock && (P.PressingFire() || P.PressingAltFire()));
     if ( bLock )
@@ -296,7 +260,9 @@ simulated function TP_FaceBody( float dt )
         return;
 
     t_bodyYaw = TP_YawShort( t_bodyYaw );
-    Step = FMax( 1.0, tp_turnspeed * dt );
+    // tp_turnspeed is degrees/second; UE2 yaw units are 1/360th of 65536,
+    // so 1 deg = 182.044444 units.
+    Step = tp_turnspeed * dt * 182.044444;
     Diff = TP_YawShort( t_bodyTargetYaw - t_bodyYaw );
     if      ( Diff >  Step )
         t_bodyYaw += Step;
@@ -309,14 +275,6 @@ simulated function TP_FaceBody( float dt )
     BodyRot.Yaw   = int(TP_YawShort( t_bodyYaw )) & 65535;
     BodyRot.Roll  = 0;
     P.FaceRotation( BodyRot, dt );
-
-    if ( tp_debug && (Level.TimeSeconds - t_lastApplyLog) > 1.0 )
-    {
-        t_lastApplyLog = Level.TimeSeconds;
-        Log( "GTA-TP: body apply target="$t_bodyTargetYaw
-             $" eased="$BodyRot.Yaw
-             $" pawnYawAfter="$P.Rotation.Yaw );
-    }
 }
 
 function float TP_YawShort( float Diff )
@@ -860,18 +818,6 @@ exec function TP_AimMode()      // tighter camera, body locked to the crosshair
     bTPAim = !bTPAim;
 }
 
-exec function TP_SpinTest()      // debug: force the body to spin continuously
-{
-    local string StateStr;
-
-    t_spinTest = !t_spinTest;
-    if ( t_spinTest )
-        StateStr = "ON";
-    else
-        StateStr = "off";
-    Log( "GTA-TP: spin test "$StateStr );
-}
-
 exec function TP_SetDist( float D )
 {
     tp_dist = FClamp( D, 10.0, 3000.0 );
@@ -890,9 +836,9 @@ exec function TP_SetHeight( float H )
     SaveConfig();
 }
 
-exec function TP_SetTurnSpeed( float T )
+exec function TP_SetTurnSpeed( float T )   // degrees per second
 {
-    tp_turnspeed = FMax( 1.0, T );
+    tp_turnspeed = FClamp( T, 1.0, 10000.0 );
     SaveConfig();
 }
 
@@ -924,7 +870,7 @@ defaultproperties
      tp_dist=110.000000
      tp_shoulder=20.000000
      tp_height=0.000000
-     tp_turnspeed=3600.000000
+     tp_turnspeed=1373.000000
      tp_easetime=0.250000
      tp_autoadjust=True
      tp_crouch_dist=75.000000
@@ -938,7 +884,7 @@ defaultproperties
      tp_fp_in=20.000000
      tp_fp_out=35.000000
      tp_bindver=0
-     tp_turnver=0
+     tp_turnver=3
      tp_debug=False
      tp_autobind=True
 }
