@@ -47,6 +47,7 @@ var config name  tp_bone;           // root bone used for the cosmetic yaw
 var config int   tp_bonespace;      // SetBoneRotation space (1 = global)
 var config int   tp_bindver;        // internal: version of the default binds already applied
 var config bool  tp_debug;          // logs install details once per game (for playtesting)
+var config bool  tp_autobind;       // 0 = never overwrite existing key binds; 1 = force default binds once
 
 // ------ runtime state ------
 var transient bool  bTPAim;
@@ -58,23 +59,55 @@ var transient bool  t_bodyTargetValid;
 var transient bool  t_fpLock;
 var transient float t_lastCamCalc;
 var transient bool  t_camLogged;
+var transient bool  t_unlockLogged;
+var transient bool  t_probed;          // cosmetic body probe done
+var transient name  t_bodyBone;        // bone chosen for the cosmetic turn
+var transient int   t_bodySpace;       // SetBoneRotation space chosen
 
-const TP_BINDVERSION = 1;
+// cosmetic body probe state (runs once per possess, picks bone+space that works)
+var transient int       p_i;
+var transient bool      p_waiting;
+var transient name      p_bone;
+var transient int       p_space;
+var transient float     p_before;
+var transient rotator   p_probeRot;
+
+const TP_BINDVERSION = 2;
 
 simulated event PostBeginPlay()
 {
     Super.PostBeginPlay();
 
     // Default keybinds, applied once (hl-thirdperson style first-run binds).
-    // Works directly in singleplayer/listen; overridden binds stay user-owned.
+    // UT2004 has no `bind` console command; the stock UI (GUIController)
+    // writes binds with `set Input <key> <command>` and reads them with
+    // `KEYBINDING <key>` — that is what we use here.
     if ( tp_bindver < TP_BINDVERSION )
+        TP_SetDefaultBinds();
+}
+
+exec function TP_SetDefaultBinds()   // re-runable fix for the keybinds
+{
+    TP_DoBind( "Z",   "TP_Toggle" );
+    TP_DoBind( "X",   "TP_SwapShoulder" );
+    TP_DoBind( "ALT", "TP_AimMode" );
+    tp_bindver = TP_BINDVERSION;
+    SaveConfig();
+}
+
+function TP_DoBind( string KeyName, string Command )
+{
+    local string Cur;
+
+    Cur = ConsoleCommand( "KEYBINDING" @ KeyName );
+    if ( !tp_autobind && Cur != "" && Cur != Command )
     {
-        ConsoleCommand("bind Z TP_Toggle");
-        ConsoleCommand("bind X TP_SwapShoulder");
-        ConsoleCommand("bind ALT TP_AimMode");
-        tp_bindver = TP_BINDVERSION;
-        SaveConfig();
+        Log( "GTA-TP: key '"$KeyName$"' already bound to '"$Cur$"', skipped (tp_autobind=false)" );
+        return;
     }
+    if ( Cur != Command )
+        Log( "GTA-TP: binding key "$KeyName$" -> "$Command$" (was '"$Cur$"')" );
+    ConsoleCommand( "set Input" @ KeyName @ Command );
 }
 
 function Possess( Pawn aPawn )
@@ -91,7 +124,17 @@ function Possess( Pawn aPawn )
     t_bodyTargetYaw   = Rotation.Yaw;
     t_bodyTargetValid = false;
     t_fpLock          = false;
+    t_camLogged       = false;
+    t_unlockLogged    = false;
     t_lastCamCalc     = Level.TimeSeconds;
+
+    // reset the cosmetic body probe for the new pawn
+    t_probed    = false;
+    p_i         = 0;
+    p_waiting   = false;
+    p_probeRot.Pitch = 0;
+    p_probeRot.Yaw   = 4096;    // ~22.5° test rotation
+    p_probeRot.Roll  = 0;
 
     if ( tp_debug )
         Log( "GTA-TP: Possess pawn="$aPawn$" controller="$Class
@@ -132,9 +175,16 @@ function TP_UpdateTick( float dt )
 
 function TP_ResetBody( Pawn P )
 {
+    local name B;
+    local int S;
+
+    if ( t_probed ) { B = t_bodyBone; S = t_bodySpace; }
+    else            { B = tp_bone;    S = tp_bonespace; }
+    if ( B == 'None' ) B = 'Bip01';
+
     t_bodyYawOffset   = 0.0;
     t_bodyTargetValid = false;
-    P.SetBoneRotation( tp_bone, rot(0,0,0), tp_bonespace, 1.0 );
+    P.SetBoneRotation( B, rot(0,0,0), S, 1.0 );
 }
 
 function TP_UpdateBody( float dt, Pawn P )
@@ -142,6 +192,12 @@ function TP_UpdateBody( float dt, Pawn P )
     local float Step, Diff, HVel;
     local vector HV;
     local bool bLockBody;
+
+    if ( !t_probed )
+    {
+        TP_ProbeTick( P );
+        return;
+    }
 
     bLockBody = ( bTPAim || (tp_fire_lock && (P.PressingFire() || P.PressingAltFire())) );
     if ( bLockBody )
@@ -183,14 +239,94 @@ function TP_UpdateBody( float dt, Pawn P )
     TP_ApplyBody( P, t_bodyYawOffset );
 }
 
+// ---------------------------------------------------------------------------
+// cosmetic body auto-probe
+//
+// UE2 sets bone rotations on the live skeletal instance and the semantics of
+// SetBoneRotation's Space (and valid root bone names) vary between
+// meshes/engines asserting them from code alone is not enough, so we probe:
+// apply a 22.5° yaw to each candidate bone with Space 1 then Space 0, read the
+// bone rotation back on the next tick, and adopt the first combination whose
+// rotation actually changed. Result logged under tp_debug.
+// ---------------------------------------------------------------------------
+function name TP_ProbeBoneName( int idx )
+{
+    switch ( idx )
+    {
+    case 0: return 'Bip01';
+    case 1: return 'Bip01 Pelvis';
+    case 2: return 'root';
+    case 3: return 'head';
+    }
+    return 'None';
+}
+
+function TP_ClearProbe( Pawn P )
+{
+    local rotator Zero;
+
+    Zero.Pitch = 0; Zero.Yaw = 0; Zero.Roll = 0;
+    P.SetBoneRotation( p_bone, Zero, p_space, 1.0 );
+}
+
+function TP_ProbeTick( Pawn P )
+{
+    local float Now;
+
+    if ( p_waiting )
+    {
+        Now = float(P.GetBoneRotation( p_bone, p_space ).Yaw);
+        if ( Abs( TP_YawShort( Now - p_before ) ) > 2048.0 )
+        {
+            // this (bone, space) pair really rotates: adopt it
+            t_bodyBone  = p_bone;
+            t_bodySpace = p_space;
+            TP_ClearProbe( P );
+            t_probed = true;
+            if ( tp_debug )
+                Log( "GTA-TP: cosmetic body probe: bone='"$t_bodyBone$"' space="$t_bodySpace );
+            return;
+        }
+        p_waiting = false;
+        p_i++;             // pair failed, next one
+    }
+
+    while ( !p_waiting )
+    {
+        if ( p_i >= 8 )    // 4 candidate bones x 2 spaces
+        {
+            // nothing responded: keep the configured defaults
+            t_bodyBone  = 'Bip01';
+            t_bodySpace = tp_bonespace;
+            t_probed = true;
+            if ( tp_debug )
+                Log( "GTA-TP: cosmetic body probe FAILED; using bone='"$t_bodyBone$"' space="$t_bodySpace$" (set tp_bone/tp_bonespace to override)" );
+            return;
+        }
+
+        p_bone = TP_ProbeBoneName( p_i / 2 );
+        if ( (p_i % 2) == 0 ) p_space = 1;
+        else                  p_space = 0;
+        if ( tp_bone != 'None' && p_i == 0 )
+            p_bone = tp_bone;
+
+        p_before = float(P.GetBoneRotation( p_bone, p_space ).Yaw);
+        P.SetBoneRotation( p_bone, p_probeRot, p_space, 1.0 );
+        p_waiting = true;
+    }
+}
+
 function TP_ApplyBody( Pawn P, float YawOff )
 {
     local rotator BodyRot;
 
+    if ( !t_probed )   // shouldn't happen, be safe
+        return;
+
     BodyRot.Pitch = 0;
     BodyRot.Yaw   = int(YawOff);
     BodyRot.Roll  = 0;
-    P.SetBoneRotation( tp_bone, BodyRot, tp_bonespace, 1.0 );
+    P.SetBoneRotation( t_bodyBone, BodyRot, t_bodySpace, 1.0 );
 }
 
 function float TP_YawShort( float Diff )
@@ -205,17 +341,47 @@ function float TP_YawShort( float Diff )
 // ---------------------------------------------------------------------------
 event PlayerCalcView( out actor ViewActor, out vector CameraLocation, out rotator CameraRotation )
 {
-    if ( tp_enable && bBehindView && (ViewTarget == Pawn) && (Pawn != None)
-         && !Pawn.bSpecialCalcView && (Vehicle(Pawn) == None)
-         && !IsSpectating() && (Pawn.Health > 0) )
+    local bool bGTA;
+
+    bGTA = tp_enable && (ViewTarget == Pawn) && (Pawn != None)
+           && !Pawn.bSpecialCalcView && (Vehicle(Pawn) == None)
+           && !IsSpectating() && (Pawn.Health > 0);
+
+    // bBehindView OR t_fpLock: while the auto first person lock is engaged we
+    // must keep re-evaluating the room behind the pawn to unlock it, so stay
+    // routed on our branch even when bBehindView is false (fix for the latch
+    // where the lock was never released until death/respawn).
+    if ( bGTA && (bBehindView || t_fpLock) )
     {
         ViewActor      = Pawn;
         CameraLocation = Pawn.Location;
-        TP_CalcCam( CameraLocation, CameraRotation );
+
+        if ( bBehindView )
+        {
+            TP_CalcCam( CameraLocation, CameraRotation );
+            return;
+        }
+
+        // auto-FP engaged: refresh the room test; unlock when there is space
+        TP_RefreshFP();
+        if ( !t_fpLock )
+        {
+            bBehindView = true;
+            if ( tp_debug && !t_unlockLogged )
+            {
+                t_unlockLogged = true;
+                Log( "GTA-TP: room recovered, back to third person" );
+            }
+            TP_CalcCam( CameraLocation, CameraRotation );
+        }
+        else
+        {
+            CalcFirstPersonView( CameraLocation, CameraRotation );
+        }
         return;
     }
 
-    // dead, spectating, vehicles, other view targets, or disabled: stock path
+    // dead, spectating, vehicles, other view targets, disabled, or manual FP: stock path
     Super.PlayerCalcView( ViewActor, CameraLocation, CameraRotation );
 }
 
@@ -250,29 +416,63 @@ function TP_CalcCam( out vector CamLoc, out rotator CamRot )
 
     if ( tp_auto_fp )
     {
-        if ( FreeDist < tp_fp_in )  t_fpLock = true;
-        if ( FreeDist > tp_fp_out ) t_fpLock = false;
+        if ( FreeDist < tp_fp_in )
+        {
+            t_fpLock = true;
+            // no room behind: stock first person until there is space again
+            bBehindView = false;
+            CalcFirstPersonView( CamLoc, CamRot );
+            return;
+        }
+        if ( FreeDist > tp_fp_out )
+            t_fpLock = false;
     }
     else
         t_fpLock = false;
 
-    if ( t_fpLock )
-    {
-        // no room behind: stock first person until there is space again
-        bBehindView = false;
-        CalcFirstPersonView( CamLoc, CamRot );
-        return;
-    }
     bBehindView = true;
+    t_unlockLogged = false;
 
     CamLoc = Anchor - FreeDist * Dir;
 
     if ( tp_debug && !t_camLogged )
     {
         t_camLogged = true;
-        Log( "GTA-TP: camera active dist="$t_camDist$
-             " shoulder="$t_camShoulder$" height="$t_camHeight );
+        Log( "GTA-TP: camera active dist="$t_camDist
+             $" shoulder="$t_camShoulder$" height="$t_camHeight );
     }
+}
+
+// Room check while we are already in first person because of the auto-FP lock
+// (uses the same anchor/trace math as TP_CalcCam; only un-locks on room).
+function TP_RefreshFP()
+{
+    local vector Anchor, Dir, RightVec, HitLoc, HitNormal;
+    local float  FreeDist, dt;
+    local rotator YawOnly;
+
+    dt = FMin( Level.TimeSeconds - t_lastCamCalc, 0.5 );
+    if ( dt < 0.0 ) dt = 0.0;
+    t_lastCamCalc = Level.TimeSeconds;
+
+    TP_SetCamParams( dt );
+
+    Dir = vector(Rotation);
+    YawOnly.Pitch = 0;
+    YawOnly.Yaw   = Rotation.Yaw;
+    YawOnly.Roll  = 0;
+    RightVec = vect(0,1,0) >> YawOnly;
+
+    Anchor = Pawn.Location + Pawn.EyePosition();
+    Anchor.Z += t_camHeight;
+    Anchor += t_shoulderSign * t_camShoulder * RightVec;
+
+    FreeDist = t_camDist;
+    if ( Trace( HitLoc, HitNormal, Anchor - t_camDist * Dir, Anchor, false, vect(10,10,10) ) != None )
+        FreeDist = FMax( 0.0, FMin( ((Anchor - HitLoc) Dot Dir) - 8.0, t_camDist ) );
+
+    if ( FreeDist > tp_fp_out )
+        t_fpLock = false;
 }
 
 function TP_SetCamParams( float dt )
@@ -511,4 +711,5 @@ defaultproperties
      tp_bonespace=1
      tp_bindver=0
      tp_debug=False
+     tp_autobind=True
 }

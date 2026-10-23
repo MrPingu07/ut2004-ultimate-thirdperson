@@ -25,7 +25,7 @@ body turns cosmetically towards the movement direction.
   untouched. No pawn replacement, no weapon replacement.
 - All values configurable, stored in `System/GTAThirdPerson.ini`.
 
-## Keys (defaults, applied once, rebindingable)
+## Keys (defaults, applied once, rebindable)
 
 | Key | Command | Action |
 |---|---|---|
@@ -33,11 +33,20 @@ body turns cosmetically towards the movement direction.
 | `X` | `TP_SwapShoulder` | swap camera shoulder (eased) |
 | `Alt` | `TP_AimMode` | toggle aim mode |
 
-The mod tries to bind them on first run (`tp_bindver` in
-`GTAThirdPerson.ini`); only empty keys are auto-bound, occupied keys are
-reported instead — set those from **Settings > Controls** (`TP_Toggle`,
-`TP_SwapShoulder`, `TP_AimMode` appear as console commands) or the console
-(`bind <key> <command>`).
+On first run the mod applies these itself using the stock UT2004 mechanism
+(`set Input <key> <command>` — UT2004 has **no** `bind` console command). With
+`tp_autobind=True` (default) it **overwrites** whatever `Z`, `X` and `Alt` were
+bound to (this install: `Z=Strafe` legacy key and `X=ShowVoteMenu`); set
+`tp_autobind=False` to only bind keys that are free. Restore at any time from
+**Settings > Controls** or the console:
+
+```
+set Input Z TP_Toggle          ; re-apply
+set Input Z Strafe             ; restore the old bind
+set Input X ShowVoteMenu
+```
+
+If binds ever stop working, run the console command `TP_SetDefaultBinds`.
 
 ## Settings
 
@@ -61,11 +70,13 @@ or the exec commands below):
 | `tp_fp_in` / `tp_fp_out` | 20 / 35 | free-space hysteresis for the auto first person |
 | `tp_bone` | Bip01 | root bone used for the cosmetic turn |
 | `tp_bonespace` | 1 | `SetBoneRotation` space (1 = global) |
-| `tp_debug` | 0 | logs install details once per game |
+| `tp_autobind` | 1 | auto-binds may overwrite existing keys on first run |
+| `tp_debug` | 0 | logs install/probe details once per game |
 
 Exec commands on the player controller: `TP_Toggle`, `TP_SwapShoulder`,
 `TP_AimMode`, `TP_SetDist <f>`, `TP_SetShoulder <f>`, `TP_SetHeight <f>`,
-`TP_SetTurnSpeed <f>`, `TP_SetEaseTime <f>`, `TP_Info` (logs state to the log).
+`TP_SetTurnSpeed <f>`, `TP_SetEaseTime <f>`, `TP_SetDefaultBinds`, `TP_Info`
+(logs state to the log).
 
 ## Install
 
