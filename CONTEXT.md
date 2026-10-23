@@ -417,3 +417,26 @@ Polish implemented:
 Rebuilt (0 errors, 0 warnings), reinstalled, `ucc server` smoke clean. User's
 ini verified pre-state: tp_turnspeed=250000 + tp_turnver=2 → migrates to
 1373.3 deg/s on next possession.
+
+### 2026-10-23 — round 8: shoulder default 30, stance setters, README docs overhaul
+
+Round-8 report (play-testing): the tuned shoulder is 30 (default was 20).
+Docs did not reflect the real command set; crouch/aim stance values had no
+in-game setters.
+
+1. **tp_shoulder default 20 -> 30** (compiled default), migrated once for
+   existing configs by bumping TP_CFGVERSION (= tp_turnver marker) to 4.
+   Renamed the const from TP_TURNVERSION to TP_CFGVERSION since it now covers
+   general defaults migration (3 = turnspeed units->deg, 4 = shoulder 30);
+   the ini var tp_turnver must keep its name (already stored).
+2. **Six new exec commands** (each clamps + SaveConfig, same ranges as the
+   parent stance): TP_SetCrouchDist / TP_SetCrouchShoulder /
+   TP_SetCrouchHeight (75/18/12) and TP_SetAimDist / TP_SetAimShoulder /
+   TP_SetAimHeight (55/14/0).
+3. **README rewritten**: keys table kept; new "Console commands" table with
+   all defaults/ranges (incl. degrees/s note and legacy-units migration
+   note); ini-only settings table (tp_enable, tp_autoadjust, tp_fire_lock,
+   tp_auto_fp, tp_fp_in/out, tp_autobind, tp_debug, migration markers).
+   Stale 20/3600-units values removed.
+
+Rebuilt (0 errors, 0 warnings), reinstalled, smoke clean.

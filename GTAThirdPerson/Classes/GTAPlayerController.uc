@@ -47,7 +47,7 @@ var config bool  tp_auto_fp;        // auto first person when there is no room b
 var config float tp_fp_in;          // free space below which it switches to first person
 var config float tp_fp_out;         // free space from which it returns to third person
 var config int   tp_bindver;        // internal: version of the default binds already applied
-var config int   tp_turnver;        // internal: version of the tp_turnspeed migration
+var config int   tp_turnver;        // internal: config-defaults migration marker (see TP_CFGVERSION)
 var config bool  tp_debug;          // logs install details once per game (for playtesting)
 var config bool  tp_autobind;       // 0 = never overwrite existing key binds; 1 = force default binds once
 
@@ -70,7 +70,10 @@ var transient float t_dblTimer;          // (PlayerInput is private to Engine.Pl
 var transient float t_lastReticleScan;   // throttle for the vehicle reticle mute scan
 
 const TP_BINDVERSION = 2;
-const TP_TURNVERSION = 3;               // 3: tp_turnspeed reinterpreted as degrees/second
+// Config migration version (stored in tp_turnver for ini compat):
+//  2 = binds v2 (historical), 3 = tp_turnspeed units->degrees (round 7),
+//  4 = tp_shoulder default 20 -> 30 (round 8, user-tested).
+const TP_CFGVERSION = 4;
 
 simulated event PostBeginPlay()
 {
@@ -83,18 +86,18 @@ simulated event PostBeginPlay()
     if ( tp_bindver < TP_BINDVERSION )
         TP_SetDefaultBinds();
 
-    // Round 7: tp_turnspeed is measured in DEGREES per second now. Existing
-    // configs (tp_turnver < 3) carry rotator-unit values (65536 = 360 deg),
-    // so convert once. The user-tested attractive default (~250000 units/s)
-    // lands at ~1373 deg/s, which is also the fresh-install default: fresh
-    // configs skip this branch via tp_turnver=3 in defaultproperties.
-    if ( tp_turnver < TP_TURNVERSION )
+    // Round 7+8 config migration (see TP_CFGVERSION). Legacy inis carry
+    // rotator-unit turn speeds and the old 20 shoulder; fresh installs skip
+    // this branch via tp_turnver=4 in defaultproperties.
+    if ( tp_turnver < TP_CFGVERSION )
     {
-        tp_turnspeed = FClamp( tp_turnspeed / 182.044444, 1.0, 2000.0 );
-        tp_turnver   = TP_TURNVERSION;
+        if ( tp_turnver < 3 )
+            tp_turnspeed = FClamp( tp_turnspeed / 182.044444, 1.0, 2000.0 );
+        tp_shoulder = 30.0;
+        tp_turnver  = TP_CFGVERSION;
         SaveConfig();
         if ( tp_debug )
-            Log( "GTA-TP: tp_turnspeed migrated to degrees per second ("$tp_turnspeed$" deg/s)" );
+            Log( "GTA-TP: config migrated (turnspeed to deg/s if needed, shoulder to 30)" );
     }
 }
 
@@ -842,6 +845,42 @@ exec function TP_SetTurnSpeed( float T )   // degrees per second
     SaveConfig();
 }
 
+exec function TP_SetCrouchDist( float D )
+{
+    tp_crouch_dist = FClamp( D, 10.0, 3000.0 );
+    SaveConfig();
+}
+
+exec function TP_SetCrouchShoulder( float S )
+{
+    tp_crouch_shoulder = FClamp( S, 0.0, 800.0 );
+    SaveConfig();
+}
+
+exec function TP_SetCrouchHeight( float H )
+{
+    tp_crouch_height = FClamp( H, -200.0, 400.0 );
+    SaveConfig();
+}
+
+exec function TP_SetAimDist( float D )
+{
+    tp_aim_dist = FClamp( D, 10.0, 3000.0 );
+    SaveConfig();
+}
+
+exec function TP_SetAimShoulder( float S )
+{
+    tp_aim_shoulder = FClamp( S, 0.0, 800.0 );
+    SaveConfig();
+}
+
+exec function TP_SetAimHeight( float H )
+{
+    tp_aim_height = FClamp( H, -200.0, 400.0 );
+    SaveConfig();
+}
+
 exec function TP_SetEaseTime( float E )
 {
     tp_easetime = FMax( 0.0, E );
@@ -868,7 +907,7 @@ defaultproperties
 {
      tp_enable=True
      tp_dist=110.000000
-     tp_shoulder=20.000000
+     tp_shoulder=30.000000
      tp_height=0.000000
      tp_turnspeed=1373.000000
      tp_easetime=0.250000
@@ -884,7 +923,7 @@ defaultproperties
      tp_fp_in=20.000000
      tp_fp_out=35.000000
      tp_bindver=0
-     tp_turnver=3
+     tp_turnver=4
      tp_debug=False
      tp_autobind=True
 }

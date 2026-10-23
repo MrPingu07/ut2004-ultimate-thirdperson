@@ -56,31 +56,64 @@ If binds ever stop working, run the console command `TP_SetDefaultBinds`.
 
 ## Settings
 
-`System/GTAThirdPerson.ini`, section `[GTAThirdPerson.GTAPlayerController]`
-(all also changeable at runtime via `set GTAThirdPerson.GTAPlayerController <name> <value>`
-or the exec commands below):
+All settings live in `System/GTAThirdPerson.ini`, section
+`[GTAThirdPerson.GTAPlayerController]`. Every tuning value also has an
+**in-game console command** (recommended — it clamps and saves for you).
+
+### Player keys (applied once on first run, rebindable)
+
+| Key | Command | Action |
+|---|---|---|
+| `Z` | `TP_Toggle` | first <-> third person |
+| `X` | `TP_SwapShoulder` | swap camera shoulder (eased) |
+| `Alt` | `TP_AimMode` | toggle aim mode |
+
+On first run the mod applies these itself using the stock UT2004 mechanism
+(`set Input <key> <command>` — UT2004 has **no** `bind` console command). With
+`tp_autobind=True` (default) it **overwrites** whatever `Z`, `X` and `Alt` were
+bound to (this install: `Z=Strafe` legacy key and `X=ShowVoteMenu`); set
+`tp_autobind=False` to only bind keys that are free. Restore at any time from
+**Settings > Controls** or the console:
+
+```
+set Input Z TP_Toggle          ; re-apply
+set Input Z Strafe             ; restore the old bind
+set Input X ShowVoteMenu
+```
+
+If binds ever stop working, run the console command `TP_SetDefaultBinds`.
+
+### Console commands (persist to the ini)
+
+| Command | Default | Range | Description |
+|---|---|---|---|
+| `TP_SetDist <D>` | 110 | 10–3000 | camera distance behind the pawn |
+| `TP_SetShoulder <S>` | 30 | 0–800 | sideways offset, units ≈ UU; side = `X` (or ini sign) |
+| `TP_SetHeight <H>` | 0 | −200–400 | vertical camera offset (positive up) |
+| `TP_SetTurnSpeed <T>` | 1373 | 1–10000 | body turn speed in **°/s** (1373 ≈ 3.8 turns/s); always the shortest arc |
+| `TP_SetEaseTime <E>` | 0.25 | ≥ 0 | pose easing time for shoulder/height/distance switches |
+| `TP_SetCrouchDist <D>` / `TP_SetCrouchShoulder <S>` / `TP_SetCrouchHeight <H>` | 75 / 18 / 12 | like `Dist/Shoulder/Height` | crouch stance — used while crouched if `tp_autoadjust` is on |
+| `TP_SetAimDist <D>` / `TP_SetAimShoulder <S>` / `TP_SetAimHeight <H>` | 55 / 14 / 0 | like `Dist/Shoulder/Height` | aim-mode (`Alt`) stance overrides |
+| `TP_Toggle` / `TP_SwapShoulder` / `TP_AimMode` | — | — | your already-playing view toggles |
+| `TP_SetDefaultBinds` | — | — | re-apply the `Z` / `X` / `Alt` binds |
+| `TP_Info` | — | — | dump the current camera/body state to `UT2004.log` |
+
+The body turn speed used to be configured in raw engine rotator units
+(65536 = one turn); configs saved before round 7 are converted automatically
+to the degrees scale on first run.
+
+### ini-only settings
 
 | Setting | Default | Description |
 |---|---|---|
-| `tp_enable` | 1 | 0 = stock first person |
-| `tp_dist` | 110 | camera distance |
-| `tp_shoulder` | 20 | camera shoulder (magnitude; the sign or `TP_SwapShoulder` sets the side) |
-| `tp_height` | 0 | vertical camera offset (positive up) |
-| `tp_turnspeed` | 3600 | body turn speed, rotator units/s (~20°/s) |
-| `tp_easetime` | 0.25 | easing time in seconds for shoulder/height/distance |
-| `tp_autoadjust` | 1 | use crouch values while crouching |
-| `tp_crouch_dist` / `tp_crouch_shoulder` / `tp_crouch_height` | 75 / 18 / 12 | crouch stance |
-| `tp_aim_dist` / `tp_aim_shoulder` / `tp_aim_height` | 55 / 14 / 0 | aim mode stance |
-| `tp_fire_lock` | 1 | body locked to the crosshair while firing |
+| `tp_enable` | 1 | 0 = stock first person everywhere |
+| `tp_autoadjust` | 1 | use the crouch stance while crouching |
+| `tp_fire_lock` | 1 | body locked to the crosshair while firing (0 = only aim mode locks) |
 | `tp_auto_fp` | 1 | auto first person when there is no room behind |
 | `tp_fp_in` / `tp_fp_out` | 20 / 35 | free-space hysteresis for the auto first person |
-| `tp_autobind` | 1 | auto-binds may overwrite existing keys on first run |
-| `tp_debug` | 0 | logs install details once per game |
-
-Exec commands on the player controller: `TP_Toggle`, `TP_SwapShoulder`,
-`TP_AimMode`, `TP_SetDist <f>`, `TP_SetShoulder <f>`, `TP_SetHeight <f>`,
-`TP_SetTurnSpeed <f>`, `TP_SetEaseTime <f>`, `TP_SetDefaultBinds`, `TP_Info`
-(logs state to the log).
+| `tp_autobind` | 1 | first-run binds may overwrite existing keys |
+| `tp_debug` | 0 | one-line info logs (possess/camera/ migrations) |
+| `tp_bindver`, `tp_turnver` | internal | config-defaults migration markers — leave alone |
 
 ## Install
 
