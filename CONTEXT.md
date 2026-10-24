@@ -606,3 +606,39 @@ GPLv3: LICENSE + short GPL headers in both .uc sources; README renamed to
 .gitignore gained dist/. Multiplayer section already in README; MP playtest +
 the pending publish questions (license visibility) resolved by user's call:
 public + GPLv3.
+
+### 2026-10-23 — round 12: underwater rendering followed the pawn's eyes (found + fixed)
+
+Report: with the mod in third person, the underwater blue fog "doesn't update
+unless I manually go in and out of third person", and its state "is determined
+in relation to the player's eyes" instead of the camera.
+
+Root cause (Engine/PlayerController.uc):
+
+- PlayerController.ViewFlash (~1109) IS already camera-based in third person:
+  `ViewVolume = Level.GetPhysicsVolume(CalcViewLocation)` when bBehindView,
+  `Pawn.HeadVolume` (head/eyes) in first person; the blend per-step
+  (UpdateFlashComponent, ScreenFlashScaling) drives the on-screen water fog.
+- CalcViewLocation is filled by the stock PlayerCalcView wrapper via
+  CacheCalcView() — every one of its branches calls CacheCalcView before
+  returning (PlayerCalcView is also wrapped in a per-frame dedupe).
+- OUR override's third-person branch returned early WITHOUT CacheCalcView, so
+  CalcViewLocation held the last first-person eye position; the water fog kept
+  following the eyes and only refreshed when a fresh first-person calc ran
+  (manual toggle) — exactly the report.
+
+Fix: call CacheCalcView(ViewActor, CameraLocation, CameraRotation) on all
+three direct returns in our PlayerCalcView (third-person, auto-FP unlock
+re-entry into third person, auto-FP locked first person). With latched FP the
+camera == eyes anyway, so behaviour is unchanged there, and everything is fed.
+
+Rebuilt (0 errors/warnings), reinstalled, `ucc server` smoke clean (0
+criticals).
+
+User test recipe: third person at a water edge; step in until the CAMERA
+crosses the surface (not the eyes) — blue fog should appear; stand so the
+eyes are submerged but the camera is above — no fog, no manual toggle needed;
+diving down with the camera under — fog appears immediately. Also verify the
+converse: exit the water and the fog clears with the camera, not after the
+eyes leave. First-person behaviour is unchanged (eyes == camera there, and
+stock uses HeadVolume correctly).

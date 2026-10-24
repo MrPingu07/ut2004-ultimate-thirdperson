@@ -504,6 +504,19 @@ state PlayerWalking
 // ---------------------------------------------------------------------------
 // camera
 // ---------------------------------------------------------------------------
+
+// The stock PlayerCalcView body ends every branch with CacheCalcView(), which
+// fills CalcViewLocation/CalcViewRotation (the per-frame view cache). Our
+// third-person branch used to return WITHOUT that call, so CalcViewLocation
+// held the pawn's last first-person EYE position. PlayerController.ViewFlash
+// (the underwater colour/fog blend) picks its volume from there:
+//   bBehindView      -> Level.GetPhysicsVolume(CalcViewLocation)  = the CAMERA
+//   !bBehindView     -> Pawn.HeadVolume                          = the head/eyes
+// Passing no cache meant the water rendering followed the PAWN's eyes and only
+// refreshed on a manual view toggle (a fresh first-person calc). Stock
+// third person is camera-based — that's the behaviour we want, we just have to
+// feed the stock cache like every other stock branch does.
+// ---------------------------------------------------------------------------
 event PlayerCalcView( out actor ViewActor, out vector CameraLocation, out rotator CameraRotation )
 {
     local bool bGTA;
@@ -524,6 +537,7 @@ event PlayerCalcView( out actor ViewActor, out vector CameraLocation, out rotato
         if ( bBehindView )
         {
             TP_CalcCam( CameraLocation, CameraRotation );
+            CacheCalcView( ViewActor, CameraLocation, CameraRotation );
             return;
         }
 
@@ -538,10 +552,12 @@ event PlayerCalcView( out actor ViewActor, out vector CameraLocation, out rotato
                 Log( "GTA-TP: room recovered, back to third person" );
             }
             TP_CalcCam( CameraLocation, CameraRotation );
+            CacheCalcView( ViewActor, CameraLocation, CameraRotation );
         }
         else
         {
             CalcFirstPersonView( CameraLocation, CameraRotation );
+            CacheCalcView( ViewActor, CameraLocation, CameraRotation );
         }
         return;
     }
