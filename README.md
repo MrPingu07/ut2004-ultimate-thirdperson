@@ -194,11 +194,13 @@ tested/verified behaviour and known limits:
 - The third-person view is pushed to joining clients with the stock
   `ClientSetBehindView` replication path, so remote players get the orbit
   camera, keybinds and their **own local tuning** (each client's ini applies).
-- **Aim difference:** the crosshair-true convergence needs a camera, which a
-  remote player's server-side code does not have — remote players' shots use
-  the stock aim direction, so their bullets leave the muzzle/eye rather than
-  converging on their crosshair (the classic parallax; only noticeable with a
-  large shoulder offset at range).
+- **Aim accuracy:** remote clients stream their crosshair convergence point
+  to the server (one small unreliable vector per frame while in third
+  person), so their shots converge on the crosshair just like the host's. If
+  a client stops streaming (first person, auto-FP lock, death/hover wait),
+  its shots fall back to the stock aim direction until it returns to third
+  person. The point is trusted at the same level stock already trusts each
+  client's view rotation. Keys and tuning remain per-machine as described.
 - The body-facing fix is server-authoritative (pawn rotation replicates to
   everyone), so other players see the body turning toward your movement.
 

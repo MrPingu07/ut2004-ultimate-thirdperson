@@ -642,3 +642,40 @@ diving down with the camera under — fog appears immediately. Also verify the
 converse: exit the water and the fog clears with the camera, not after the
 eyes leave. First-person behaviour is unchanged (eyes == camera there, and
 stock uses HeadVolume correctly).
+
+### 2026-10-23 — round 13: crosshair-true aim for remote clients (round-11 fallback removed)
+
+Report: remote players' shots don't converge on their crosshair (v1.0/v1.0.1
+intentionally fell back to the stock aim branch server-side — the camera with
+the true ray only exists on the client).
+
+Implementation (GTAPlayerController):
+
+- New `ServerTPAimPoint(vector Aim)` + unreliable replication entry
+  `unreliable if (Role < ROLE_Authority) ServerTPAimPoint;` (child classes may
+  add statements; xPlayer rules stay). TP_CalcAimPoint — which only runs on
+  the machine that renders the view, and only in the applied third-person
+  branch — now stamps freshness (`t_aimRecv = Level.TimeSeconds`) and, when
+  the controller is NOT authoritative (remote client), streams its point.
+- Server fills t_aimPoint/t_aimValid/t_aimRecv from the stream. Host and
+  standalone keep stamping locally every camera frame, so the same freshness
+  gate covers both source types.
+- TP_ShootConvergence gained `(Level.TimeSeconds - t_aimRecv < 0.2)`: a client
+  that stops streaming (FP toggle, auto-FP lock, death) silently falls back
+  to the stock aim branch — the round-11 fail-safe, tightened by clock instead
+  of trusting stale bBehindView (which is not replicated).
+- Possess keeps t_aimValid=false; stream presence or its own camera calc makes
+  it true within a frame. Possess needn't stamp t_aimRecv (validity is the
+  gate until data exists).
+
+Trust model: same level as stock (clients already send view rotation per move
+and their hitscan aim angles). Bandwidth: ~small vector per frame while in
+third person, unreliable — comparable to stock ServerMove chatter.
+
+Can't verify headlessly: real two-machine convergence. All failure paths
+degrade to the v1.0.1 (stock-aim) behaviour by design.
+
+README MP section's "Aim difference" limitation replaced by the streaming
+description.
+
+Rebuilt (0 errors/warnings), reinstalled, smoke clean (0 criticals).

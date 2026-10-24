@@ -75,12 +75,27 @@ var transient float t_lastCamCalc;
 var transient bool  t_camLogged;
 var transient bool  t_unlockLogged;
 var transient vector t_aimPoint;         // convergence point of the shots (world)
-var transient bool   t_aimValid;         // t_aimPoint was computed locally (MP: server has no camera)
+var transient bool   t_aimValid;         // t_aimPoint was computed/streamed recently
+var transient float  t_aimRecv;          // when t_aimPoint was locally computed or streamed in
 var transient vector t_camOrigin;        // camera origin of the last view
 var transient bool  t_eF, t_eB, t_eL, t_eR, t_wasF, t_wasB, t_wasL, t_wasR;
 var transient eDoubleClickDir t_dblDir;  // our copy of PlayerInput's double click state
 var transient float t_dblTimer;          // (PlayerInput is private to Engine.PlayerController)
 var transient float t_lastReticleScan;   // throttle for the vehicle reticle mute scan
+
+// Replication additions on top of the inherited xPlayer rules. The camera —
+// and with it the crosshair convergence ray — only exists on the machine that
+// renders it, but the shots resolve server-side (AdjustAim). While in third
+// person (locally true: TP_CalcAimPoint only runs from that branch), a remote
+// client streams its convergence point here with one small unreliable vector
+// per frame, and the server uses it as long as it stays fresh; anything else
+// falls back to the stock aim branch. Same trust level as stock view rotation
+// replication.
+replication
+{
+    unreliable if ( Role < ROLE_Authority )
+        ServerTPAimPoint;
+}
 
 const TP_BINDVERSION = 2;
 // Config migration version (stored in tp_turnver for ini compat):
@@ -644,6 +659,21 @@ function TP_CalcAimPoint( vector Origin, vector Dir )
         t_aimPoint = HitLoc;
     else
         t_aimPoint = Origin + 10000.0 * Dir;
+
+    // freshness stamp for the server-side convergence gate; on remote clients
+    // this additionally streams the point to the server (see replication).
+    t_aimRecv = Level.TimeSeconds;
+    if ( Level.NetMode != NM_Standalone && Level.NetMode != NM_ListenServer && (Role < ROLE_Authority) )
+        ServerTPAimPoint( t_aimPoint );
+}
+
+// Server-side copy of the client's crosshair convergence point. Executed only
+// where the controller is authoritative (clients cannot even run the body).
+function ServerTPAimPoint( vector Aim )
+{
+    t_aimPoint = Aim;
+    t_aimValid = true;
+    t_aimRecv  = Level.TimeSeconds;
 }
 
 // Room check while we are already in first person because of the auto-FP lock
@@ -727,14 +757,13 @@ function float TP_FEase( float Current, float Target, float dt )
 
 // Conditions under which the third person convergence aim is active (shots
 // are aimed at the point the camera ray hits, t_aimPoint). The validity flag
-// matters in multiplayer: AdjustAim runs server-side, but the camera (and
-// therefore t_aimPoint) only exists on the machines that render a view —
-// without the gate a dedicated server would aim remote players' shots at the
-// world origin, and even a listen server would for its remote clients. Those
-// fall back gracefully to the stock aim path (the first-person branch below).
+// matters in multiplayer (AdjustAim runs server-side, the camera client-side),
+// and the freshness gate switches remote players back to the stock aim branch if their stream lapses (e.g. in first person, auto-FP locked, dead).
+// Listen servers and standalone keep it always fresh (local camera machine).
 simulated function bool TP_ShootConvergence()
 {
-    return tp_enable && t_aimValid && bBehindView && !t_fpLock && (Pawn != None)
+    return tp_enable && t_aimValid && (Level.TimeSeconds - t_aimRecv < 0.2)
+           && bBehindView && !t_fpLock && (Pawn != None)
            && (Vehicle(Pawn) == None) && (Pawn.Health > 0);
 }
 
