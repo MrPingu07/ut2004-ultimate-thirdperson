@@ -759,3 +759,24 @@ Fix: made the sync authoritative with periodic enforcement every 1000ms in
   and mid-game config changes.
 
 Rebuilt: 0 errors / 0 warnings.
+
+### 2026-10-25 — round 17: per-second camera diagnostics (router + cam state)
+
+Report: user reports the client still shows "shoulder=0" on screen even though
+the round-16 logs prove the sync fired (`enforced ... dist=200 shoulder=20
+height=20 autoFP=True` every second) and even `camera active` with the same
+values. Values in ini, sync logs and cam-render math all agree — the visual
+resolution is elsewhere, so instrumentation was added:
+
+- `PlayerCalcView` stock-route fallback: once per second (tp_debug) logs WHY the
+  view fell back to the stock centre-behind camera
+  (`bBehindView/fpLock/vtPawn/health/specialCalcView/vehicle/spectating/syncReady`).
+  A "no shoulder" look almost certainly means this stock branch is rendering.
+- `TP_CalcCam` third-person win path: once per second (tp_debug) logs the full
+  final render inputs (`dist/shoulderEased/sign/camShoulder/height/freeDist/
+  fpLock/aimMode/syncReady`) — what the screen actually renders.
+
+Note: UnrealScript `$` string concat only coerces plain locals — parenthesised
+expressions need to be precomputed into local bools.
+
+Rebuilt: 0 errors / 0 warnings.

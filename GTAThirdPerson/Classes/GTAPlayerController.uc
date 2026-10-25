@@ -95,6 +95,8 @@ var float  t_syncHeight;      // synced tp_height
 var bool   t_syncAutoFp;      // synced tp_auto_fp
 var bool   t_syncReady;       // true once the server has stamped the above
 var transient float t_lastSyncEnforce;  // throttle for client-side sync enforcement
+var transient float t_lastRouteDump;    // throttle for the stock-view fallback diagnostic
+var transient float t_lastCamDump;      // throttle for the per-second camera state dump
 
 // Replication additions on top of the inherited xPlayer rules. The camera —
 // and with it the crosshair convergence ray — only exists on the machine that
@@ -639,6 +641,8 @@ state PlayerWalking
 event PlayerCalcView( out actor ViewActor, out vector CameraLocation, out rotator CameraRotation )
 {
     local bool bGTA;
+    local int  RouteHP;
+    local bool RouteVtg, RouteScv, RouteVeh, RouteSpec;
 
     bGTA = tp_enable && (ViewTarget == Pawn) && (Pawn != None)
            && !Pawn.bSpecialCalcView && (Vehicle(Pawn) == None)
@@ -682,6 +686,32 @@ event PlayerCalcView( out actor ViewActor, out vector CameraLocation, out rotato
     }
 
     // dead, spectating, vehicles, other view targets, disabled, or manual FP: stock path
+    // Diagnostic (tp_debug, once per second): prints exactly which condition
+    // made the view fall back to the stock centre-behind camera. A client that
+    // *looks* like it has no shoulder offset is almost certainly rendering this
+    // stock branch, while the synced values (logged separately) are fine — so
+    // this router state is what we need to see in the log.
+    if ( tp_enable && ((Level.TimeSeconds - t_lastRouteDump) > 1.0) )
+    {
+        t_lastRouteDump = Level.TimeSeconds;
+        RouteHP = -1;
+        if ( Pawn != None )
+        {
+            RouteHP  = Pawn.Health;
+            RouteVtg = (ViewTarget == Pawn);
+            RouteScv = Pawn.bSpecialCalcView;
+            RouteVeh = Vehicle(Pawn) != None;
+        }
+        RouteSpec = IsSpectating();
+        Log( "GTA-TP: stock view path used: bBehindView="$bBehindView
+             $" fpLock="$t_fpLock
+             $" vtPawn="$RouteVtg
+             $" health="$RouteHP
+             $" specialCalcView="$RouteScv
+             $" vehicle="$RouteVeh
+             $" spectating="$RouteSpec
+             $" syncReady="$t_syncReady );
+    }
     Super.PlayerCalcView( ViewActor, CameraLocation, CameraRotation );
 }
 
@@ -732,6 +762,24 @@ function TP_CalcCam( out vector CamLoc, out rotator CamRot )
 
     bBehindView = true;
     t_unlockLogged = false;
+
+    // Diagnostic (tp_debug, once per second): the full set of values the final
+    // camera position is built from on this machine. This is what the screen
+    // actually renders, so it either matches the host's tuning (sync OK, and
+    // any visual complaint is elsewhere) or it names the exact divergence.
+    if ( tp_debug && ((Level.TimeSeconds - t_lastCamDump) > 1.0) )
+    {
+        t_lastCamDump = Level.TimeSeconds;
+        Log( "GTA-TP: cam state dist="$t_camDist
+             $" shoulderEased="$t_shoulderEased
+             $" sign="$t_shoulderSign
+             $" camShoulder="$t_camShoulder
+             $" height="$t_camHeight
+             $" freeDist="$FreeDist
+             $" fpLock="$t_fpLock
+             $" aimMode="$bTPAim
+             $" syncReady="$t_syncReady );
+    }
 
     CamLoc = Anchor - FreeDist * Dir;
 
