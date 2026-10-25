@@ -83,8 +83,7 @@ var transient bool  t_eF, t_eB, t_eL, t_eR, t_wasF, t_wasB, t_wasL, t_wasR;
 var transient eDoubleClickDir t_dblDir;  // our copy of PlayerInput's double click state
 var transient float t_dblTimer;          // (PlayerInput is private to Engine.PlayerController)
 var transient float t_lastReticleScan;   // throttle for the vehicle reticle mute scan
-var transient bool  t_behindViewSent;    // ClientSetBehindView(true) already sent post-login
-var transient float t_clientActivate;    // Level.TimeSeconds when ClientSetBehindView may be sent
+var transient bool  t_behindViewSent;    // round-22: one-shot remote ClientSetBehindView(true) sender
 
 // Server-synced camera values, replicated to joining clients so they use the
 // host's tuning instead of their own (or default) config values. config vars
@@ -142,7 +141,7 @@ const TP_CFGVERSION = 4;
 // across them can hang the client at actor-channel load with NO error string.
 // A one-line `grep "package version"` in both logs proves parity or condemns
 // the stale install. Bump this together with every behavior-affecting round.
-const TP_MODVERSION = 21;
+const TP_MODVERSION = 22;
 
 simulated event PostBeginPlay()
 {
@@ -186,8 +185,9 @@ simulated event PostBeginPlay()
     // with NO side offset — the original "client has no shoulder" report —
     // while every synced value in the logs looked fine. bBehindView is
     // deliberately NOT seeded here: third-person activation on remote clients
-    // stays deferred to the round-14 ClientSetBehindView RPC (3 s after join)
-    // to keep the D3D device-creation freeze fix intact.
+    // goes through the round-22 ClientSetBehindView sender in PlayerTick
+    // (fires the moment the remote controller ticks with a pawn). The client's
+    // bBehindView stays false until that RPC lands.
     if ( Role != ROLE_Authority )
     {
         t_shoulderSign  = 1;
@@ -273,11 +273,13 @@ function Possess( Pawn aPawn )
     // bBehindView is not a replicated var, so remote clients only ever receive a
     // behind-view change through the stock ClientSetBehindView RPC. The direct
     // assignment above covers the local host / standalone. For (remote) clients
-    // the RPC is deferred until after level load (t_clientActivate) — sending a
-    // reliable RPC from Possess/early PlayerTick, while the joining client is
-    // still toggling fullscreen and creating the D3D device, can freeze it.
+    // the one-shot flag is armed here and the RPC goes out from PlayerTick as
+    // soon as the remote ready conditions hold — round 22 removed the old
+    // 3-second deferral, which was founded on a wrong diagnosis (the freeze
+    // was the missing host ServerPackages line, see round 21 in CONTEXT.md).
+    // ClientSetBehindView itself never demonstrably caused any problem, and
+    // the deferral just made joining clients stare at first person for 3 s.
     t_behindViewSent = false;
-    t_clientActivate = Level.TimeSeconds + 3.0;
 
     if ( tp_debug )
         Log( "GTA-TP: Possess pawn="$aPawn$" controller="$Class
@@ -299,22 +301,21 @@ simulated event PlayerTick( float DeltaTime )
     bFreeCamera = tp_enable && (Pawn != None) && (Vehicle(Pawn) == None)
                   && bBehindView && !t_fpLock;
 
-    // Deferred third-person activation for (remote) clients. bBehindView is not
-    // replicated, so the client learns about it via the ClientSetBehindView RPC.
-    // The RPC is only sent once t_clientActivate (3 s after Possess) has passed,
-    // i.e. after the joining client has finished level load and D3D device
-    // creation. Sending a reliable RPC while the client is still toggling
-    // fullscreen / creating the D3D device can freeze it. Retries every frame
-    // until sent, so a transient condition miss (e.g. ViewTarget not yet the
-    // pawn) doesn't drop the activation.
+    // Third-person activation for (remote) clients. bBehindView is not
+    // replicated, so the client learns about it via the ClientSetBehindView
+    // RPC. Retries every tick until sent, so a transient condition miss
+    // (e.g. ViewTarget not yet the pawn) doesn't drop the activation; being
+    // here (rather than in Possess) means the RPC only leaves once the
+    // controller actually ticks with a pawn — for a joining client that is
+    // right at the end of its level load, not during D3D init.
+    // Round 22: the 3-second deferral was removed — founded on a wrong
+    // diagnosis (round 21: the freeze was the missing host ServerPackages line;
+    // frozen clients never received any RPC). Waiting is pure latency now.
     // Round 20: (Player == None) restricts this to REMOTE clients' server
     // copies. The local host's own controller on a listen server has Player
-    // set (it owns the viewport) and used to pass the whole gate every respawn,
-    // re-sending the RPC to itself 3 s after each Possess (harmless but noisy:
-    // the spurious "deferred ... sent" lines in the host logs were the host
-    // player's own respawns). Remote copies never have Player set.
+    // set (it owns the viewport) and must not send the RPC to itself.
+    // Remote copies never have Player set.
     if ( !t_behindViewSent
-         && Level.TimeSeconds >= t_clientActivate
          && Role == ROLE_Authority
          && (Player == None)
          && tp_enable && (Level.NetMode != NM_Standalone)
@@ -323,7 +324,7 @@ simulated event PlayerTick( float DeltaTime )
         t_behindViewSent = true;
         ClientSetBehindView( true );
         if ( tp_debug )
-            Log( "GTA-TP: deferred ClientSetBehindView(true) sent (remote)" );
+            Log( "GTA-TP: remote ClientSetBehindView(true) sent" );
     }
 
     if ( tp_enable && ((Level.TimeSeconds - t_lastReticleScan) > 1.0) )

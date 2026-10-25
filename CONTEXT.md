@@ -921,3 +921,42 @@ to the original otherwise (diff = only that line).
 Rebuilt: 0 errors / 0 warnings (round-21 .u md5 7bb1cd4ab8fccc8a74b79c36611
 ...dbf13; also confirm the round-20 changes: version stamp 21, remote-only
 deferral gate, "convergence unused" diagnostic with gate reasons).
+
+### 2026-10-25 — round 22: loose ends — the 3-second RPC deferral is gone
+
+With round 21 having established the missing host ServerPackages line as THE
+root cause of every join freeze, the round-14 deferral (wait 3 s after
+Possess before sending ClientSetBehindView(true) to a remote) had no left
+justification: frozen clients were proven to never receive any RPC, and the
+wait was pure first-person latency for joining players.
+
+Changes (GTAPlayerController):
+- Removed var t_clientActivate and its Possess-time stamp.
+- The one-shot remote activation sender in PlayerTick keeps (round 20's)
+  remote-only gate (Player == None) and its per-tick retry, but no longer
+  consults any timer: the RPC fires on the first tick where
+  Role==AUTH && Player==None && tp_enable && !Standalone && !vehicle &&
+  bBehindView && ViewTarget==Pawn — for a joining client that moment is the
+  end of its level load, so activation is now near-instant after join.
+- tp_debug line renamed to "remote ClientSetBehindView(true) sent" (the old
+  "deferred ..." wording no longer matches anything).
+- Comments updated at Possess / PostBeginPlay seed / PlayerTick sites.
+- TP_MODVERSION 21 -> 22.
+
+Kept on purpose: the one-shot gate and the retry loop — they guarantee
+exactly one RPC per remote session and survive transient early-tick misses
+(ViewTarget not yet set), which are engine facts independent of the freeze
+myth.
+
+Rebuilt: 0 errors / 0 warnings. Round-22 package md5
+e29492a32b26d7113c63cbd50d22f6d6 (never care how incrementally odd the .u
+rewrite dance looks — rm the package first, see round 20 note).
+
+Test plan for the user (same ladder, only faster): laptop hosts, desktop
+joins — third person should now engage the moment the client controller
+ticks, instead of 3 s after join. Watch for:
+- "package version 22" on BOTH ends,
+- "remote ClientSetBehindView(true) sent" no longer self-sending to the
+  host player (round 20 guard),
+- no freeze (ServerPackages line must still exist on the host — the mod now
+  self-registers it in round 21+, but verify once).
