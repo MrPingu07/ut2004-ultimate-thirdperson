@@ -839,3 +839,47 @@ target lags the server's authoritative position by ~ping/2 — not fixable from
 scripts; it is small on LAN.
 
 Rebuilt: 0 errors / 0 warnings.
+
+### 2026-10-25 — round 20: package version stamp, remote-only deferral gate, honest aim-path diagnostic
+
+Incident: first time the roles were swapped (laptop hosts SpaceNoxx, desktop
+joins), the desktop client froze during join-load — twice (03:51 and 04:10).
+Both frozen client logs end between the local `New Player` + garbage collect
+and the `Precaching:` line that always follows in successful joins, with NO
+GTA-TP client-side lines (no seed) and no download lines; the host logs show
+no `Possess` for the joining player's server copy and (04:10) only
+self-addressed `deferred ClientSetBehindView(true) sent` lines (host player's
+own respawns).
+
+Diagnosis evolution:
+- Round-14 RPC trigger ruled out twice: the client froze before any client-side
+  mod code ran, and no RPC could have been delivered to it.
+- Package drift CONFIRMED flagged: laptop's GTAThirdPerson.u md5 ended
+  ...cc57a vs desktop round-19 4f5c2325... — the user synced after checking.
+- Native map load ruled out: Instant Action SpaceNoxx (19 bots) runs flawless
+  on the desktop solo. The failure is specific to the desktop as a JOINING
+  client to the laptop's server, on any map (Tutorial test pending).
+
+Round 20 changes (all in GTAPlayerController):
+- `const TP_MODVERSION = 20` + one-line `GTA-TP: package version 20` logged in
+  PostBeginPlay on BOTH copies of any controller. Two installs that drift
+  apart (asymmetric class layouts) can hang a joining client with no error
+  string; from now on, parity is one `grep` in each log.
+- Deferredround-14 activation gate now also requires `Player == None` — this
+  only passes on REMOTE clients' server copies. The local host's own
+  controller on a listen server has Player set and used to re-send the RPC to
+  itself 3 s after every respawn (the confusing self-sends in the host logs).
+- tp_debug AdjustAim fallback diagnostic relabeled: was
+  "convergence stale (age=…)" which mislabeled non-age refusals (host's own
+  first-person frames, fpLock, vehicle, dead pawn logged "stale age=0.01").
+  Now "convergence unused (age=…, behind=…, fpLock=…, vehicle=…, health=…)"
+  so the dump is attributable ("age>0.35" = stream lapse, "behind=False" =
+  first-person frame, etc.).
+
+Rebuild procedure note: rm -f the .u/.ucl before UCC make (incremental builds
+silently skip rewriting the package).
+
+New package md5 (round 20): da1a2544097e106fc9f6eb107c175efe (.u), the .ucl
+must be copied alongside it (de8f0d61…).
+
+Rebuilt: 0 errors / 0 warnings.

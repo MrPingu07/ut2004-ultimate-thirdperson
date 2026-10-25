@@ -190,6 +190,15 @@ tested/verified behaviour and known limits:
 - The mutator must be installed (`.u`/`.int`/`.ucl`) on **both** the server and every
   joining client. Joining clients download/get the package through UT2004's normal
   mechanism, **or just copy these three files next to their `System/`**.
+- **Keep both installs byte-identical.** Downloading the package is not free of
+  surprises (the 333networks/openspy re-release may silently not re-fetch a
+  package it already has locally, even when the server's copy changed):
+  an `.u` from a different build on one machine is an **asymmetric class
+  layout**, which can hard-freeze the joining client mid-load with no error
+  string in the log. After every rebuild, copy `.u` + `.ucl` to **both**
+  machines before testing. Verify with the round-20 version stamp: each boot
+  logs `GTA-TP: package version <N>` next to the player seed line —
+  `grep "package version" UT2004.log` on both sides must print the same number.
 - **Server config:** add `ServerPackages=GTAThirdPerson` to the server's
   `System/UT2004.ini` (`[Engine.Engine]`) and **restart the server** so it advertises
   the package — otherwise joining clients never download it and get "Connection Lost"

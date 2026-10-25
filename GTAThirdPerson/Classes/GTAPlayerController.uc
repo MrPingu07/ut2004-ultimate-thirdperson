@@ -136,10 +136,20 @@ const TP_BINDVERSION = 2;
 //  2 = binds v2 (historical), 3 = tp_turnspeed units->degrees (round 7),
 //  4 = tp_shoulder default 20 -> 30 (round 8, user-tested).
 const TP_CFGVERSION = 4;
+// Round 20: low-tech install-sync guard — every copy of this package logs its
+// round number once per boot. Two installs that drift apart (an old .u copied
+// to one machine, newer on the other) have a different class layout; joining
+// across them can hang the client at actor-channel load with NO error string.
+// A one-line `grep "package version"` in both logs proves parity or condemns
+// the stale install. Bump this together with every behavior-affecting round.
+const TP_MODVERSION = 20;
 
 simulated event PostBeginPlay()
 {
     Super.PostBeginPlay();
+
+    // Round 20: runs on BOTH copies (server and client) of every controller.
+    Log( "GTA-TP: package version "$TP_MODVERSION );
 
     // Default keybinds, applied once (hl-thirdperson style first-run binds).
     // UT2004 has no `bind` console command; the stock UI (GUIController)
@@ -297,16 +307,23 @@ simulated event PlayerTick( float DeltaTime )
     // fullscreen / creating the D3D device can freeze it. Retries every frame
     // until sent, so a transient condition miss (e.g. ViewTarget not yet the
     // pawn) doesn't drop the activation.
+    // Round 20: (Player == None) restricts this to REMOTE clients' server
+    // copies. The local host's own controller on a listen server has Player
+    // set (it owns the viewport) and used to pass the whole gate every respawn,
+    // re-sending the RPC to itself 3 s after each Possess (harmless but noisy:
+    // the spurious "deferred ... sent" lines in the host logs were the host
+    // player's own respawns). Remote copies never have Player set.
     if ( !t_behindViewSent
          && Level.TimeSeconds >= t_clientActivate
          && Role == ROLE_Authority
+         && (Player == None)
          && tp_enable && (Level.NetMode != NM_Standalone)
          && (Vehicle(Pawn) == None) && bBehindView && (ViewTarget == Pawn) )
     {
         t_behindViewSent = true;
         ClientSetBehindView( true );
         if ( tp_debug )
-            Log( "GTA-TP: deferred ClientSetBehindView(true) sent" );
+            Log( "GTA-TP: deferred ClientSetBehindView(true) sent (remote)" );
     }
 
     if ( tp_enable && ((Level.TimeSeconds - t_lastReticleScan) > 1.0) )
@@ -1011,6 +1028,8 @@ function rotator AdjustAim( FireProperties FiredAmmunition, vector projStart, in
     local bool bNoZAdjust, bLeading;
     local rotator AimRot;
     local float AimAge, StaleAge;
+    local bool bHavePawn, bVeh;   // round 20: reason dump locals ($ can't coerce expressions)
+    local float SafeHealth;
 
     if ( TP_ShootConvergence() )
     {
@@ -1026,12 +1045,25 @@ function rotator AdjustAim( FireProperties FiredAmmunition, vector projStart, in
         return rotator( AimSpot - projStart );
     }
 
-    // Round 19 diagnostic (tp_debug): a known convergence point was DISMISSED
-    // by the freshness gate — the unreliable stream lapsed (packet loss) and
-    // this shot took the stock parallax-prone path instead.
+    // Round 19/20 diagnostic (tp_debug): a known convergence point existed but
+    // TP_ShootConvergence() refused it, so this shot took the stock
+    // parallax-prone path. The old label "convergence stale" was WRONG — the
+    // gate fails for several other reasons (first-person frames, fpLock,
+    // vehicle, dead pawn). Dump the whole gate so a fallback is instantly
+    // attributable: age > 0.35 = stream lapse; behind=False = shot fired from
+    // a first-person frame; the rest are self-explanatory.
     StaleAge = Level.TimeSeconds - t_aimRecv;
     if ( tp_debug && t_aimValid && StaleAge > 0.0 && StaleAge < 0.75 )
-        Log( "GTA-TP: shot on stock aim path, convergence stale (age="$StaleAge$" s)" );
+    {
+        bHavePawn  = ( Pawn != None );
+        bVeh       = bHavePawn && ( Vehicle(Pawn) != None );
+        SafeHealth = -1.0;
+        if ( bHavePawn )
+            SafeHealth = Pawn.Health;
+        Log( "GTA-TP: shot on stock aim path, convergence unused (age="$StaleAge
+             $" s, behind="$bBehindView$", fpLock="$t_fpLock
+             $", vehicle="$bVeh$", health="$SafeHealth$")" );
+    }
 
     FireDir = vector(Rotation);
     if ( FiredAmmunition.bInstantHit )
