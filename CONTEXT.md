@@ -780,3 +780,33 @@ Note: UnrealScript `$` string concat only coerces plain locals — parenthesised
 expressions need to be precomputed into local bools.
 
 Rebuilt: 0 errors / 0 warnings.
+
+### 2026-10-25 — round 18: root cause found via diagnostics — client-side state never seeded + profile-only enforcement
+
+The round-17 per-second dumps pinpointed both real defects on the next run:
+
+Client cam-state dump showed `sign=0 shoulderEased=0.00` while the host showed
+`sign=1 shoulderEased=20.00`. **`Possess()` never executes on the client copy**
+of the controller (engine-side: it runs authoritative-server-only), so the
+per-machine camera state (`t_shoulderSign`, `t_shoulderEased`, t_cam*) stayed
+at their zero defaults forever → camera rendered with zero side offset — the
+original "client has no shoulder" report. Fix: `PostBeginPlay()` (which DOES
+run on the client copy) seeds the same state the server's Possess would have
+seeded, for `Role != ROLE_Authority` copies. `bBehindView` is deliberately not
+seeded: third-person activation stays deferred to the round-14 RPC (freeze fix).
+
+Client also showed the reported aim-mode loop: dist easing toward the aim
+stance (140→138…), then snapping straight back to 200 the next second, easing
+in again, forever — ~1 s period. That was the round-15/16 enforcement writing
+the **eased runtime camera state** (`t_camDist`/`t_shoulderEased`) directly
+every second. Fix: enforcement now writes ONLY the config profile vars
+(`tp_dist/tp_shoulder/tp_height/tp_aim_*/tp_crouch_*/tp_fp_in/tp_fp_out/
+tp_easetime/tp_turnspeed/tp_auto_fp`) — in-memory, no SaveConfig — so
+`TP_SetCamParams` eases the *current* stance toward the host profile naturally.
+
+Extended: the server now replicates the FULL camera profile (aim + crouch
+stances, FP thresholds, ease/turn speeds) via `TP_StampSyncVars()` — 14 synced
+floats + `t_syncReady`. `TP_SetCamParams`'s round-15 t_sync override was
+reverted (tp_* is now the single source of truth on every machine).
+
+Rebuilt: 0 errors / 0 warnings.

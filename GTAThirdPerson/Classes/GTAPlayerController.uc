@@ -94,6 +94,16 @@ var float  t_syncShoulder;    // synced tp_shoulder
 var float  t_syncHeight;      // synced tp_height
 var bool   t_syncAutoFp;      // synced tp_auto_fp
 var bool   t_syncReady;       // true once the server has stamped the above
+var float  t_syncAimDist;        // synced tp_aim_dist
+var float  t_syncAimShoulder;    // synced tp_aim_shoulder
+var float  t_syncAimHeight;      // synced tp_aim_height
+var float  t_syncCrouchDist;     // synced tp_crouch_dist
+var float  t_syncCrouchShoulder; // synced tp_crouch_shoulder
+var float  t_syncCrouchHeight;   // synced tp_crouch_height
+var float  t_syncFpIn;           // synced tp_fp_in
+var float  t_syncFpOut;          // synced tp_fp_out
+var float  t_syncEaseTime;       // synced tp_easetime
+var float  t_syncTurnSpeed;      // synced tp_turnspeed
 var transient float t_lastSyncEnforce;  // throttle for client-side sync enforcement
 var transient float t_lastRouteDump;    // throttle for the stock-view fallback diagnostic
 var transient float t_lastCamDump;      // throttle for the per-second camera state dump
@@ -114,7 +124,10 @@ replication
     // values instead of their own (or default) config values. config vars are
     // not replicated in UT2004, hence these mirrored replicated vars.
     reliable if ( Role == ROLE_Authority )
-        t_syncDist, t_syncShoulder, t_syncHeight, t_syncAutoFp, t_syncReady;
+        t_syncDist, t_syncShoulder, t_syncHeight, t_syncAutoFp, t_syncReady,
+        t_syncAimDist, t_syncAimShoulder, t_syncAimHeight,
+        t_syncCrouchDist, t_syncCrouchShoulder, t_syncCrouchHeight,
+        t_syncFpIn, t_syncFpOut, t_syncEaseTime, t_syncTurnSpeed;
 }
 
 const TP_BINDVERSION = 2;
@@ -149,19 +162,57 @@ simulated event PostBeginPlay()
             Log( "GTA-TP: config migrated (turnspeed to deg/s if needed, shoulder to 30)" );
     }
 
-    // Stamp the server's camera tuning into replicated sync vars so joining
-    // clients use the host's values instead of their own (or default) config.
-    // config vars are not replicated in UT2004. On the local host / standalone
-    // this is a no-op for the local player (Role == Authority, no replication
-    // to self), but the direct config values are used there anyway.
+    // Stamp the server's camera profile into the replicated sync vars so
+    // joining clients adopt the host's tuning (see TP_StampSyncVars).
     if ( Role == ROLE_Authority )
+        TP_StampSyncVars();
+
+    // Possess() only ever runs on the server's copy of the controller — a
+    // remote client never executes it, so every bit of per-machine state that
+    // Possess seeds must be seeded here on the client copy too. Round 18: the
+    // client kept t_shoulderSign=0 / t_shoulderEased=0 forever (visible in the
+    // cam-state dump as "sign=0 shoulderEased=0.00"), which rendered a camera
+    // with NO side offset — the original "client has no shoulder" report —
+    // while every synced value in the logs looked fine. bBehindView is
+    // deliberately NOT seeded here: third-person activation on remote clients
+    // stays deferred to the round-14 ClientSetBehindView RPC (3 s after join)
+    // to keep the D3D device-creation freeze fix intact.
+    if ( Role != ROLE_Authority )
     {
-        t_syncDist     = tp_dist;
-        t_syncShoulder = tp_shoulder;
-        t_syncHeight   = tp_height;
-        t_syncAutoFp   = tp_auto_fp;
-        t_syncReady    = true;
+        t_shoulderSign  = 1;
+        t_camDist       = tp_dist;
+        t_camShoulder   = tp_shoulder;
+        t_camHeight     = tp_height;
+        t_shoulderEased = tp_shoulder;
+        t_bodyYaw       = Rotation.Yaw;
+        t_bodyTargetYaw = Rotation.Yaw;
+        if ( tp_debug )
+            Log( "GTA-TP: client-side camera state seeded sign="$t_shoulderSign
+                 $" dist="$tp_dist$" shoulder="$tp_shoulder$" height="$tp_height );
     }
+}
+
+// Stamp the server's FULL camera profile (all stances and thresholds) into the
+// replicated sync vars. config vars are not replicated in UT2004; this is the
+// only cross-machine channel they have. Replication transmits a var only when
+// it changes, so restamping identical values every second costs nothing.
+function TP_StampSyncVars()
+{
+    t_syncDist           = tp_dist;
+    t_syncShoulder       = tp_shoulder;
+    t_syncHeight         = tp_height;
+    t_syncAutoFp         = tp_auto_fp;
+    t_syncAimDist        = tp_aim_dist;
+    t_syncAimShoulder    = tp_aim_shoulder;
+    t_syncAimHeight      = tp_aim_height;
+    t_syncCrouchDist     = tp_crouch_dist;
+    t_syncCrouchShoulder = tp_crouch_shoulder;
+    t_syncCrouchHeight   = tp_crouch_height;
+    t_syncFpIn           = tp_fp_in;
+    t_syncFpOut          = tp_fp_out;
+    t_syncEaseTime       = tp_easetime;
+    t_syncTurnSpeed      = tp_turnspeed;
+    t_syncReady          = true;
 }
 
 exec function TP_SetDefaultBinds()   // re-runable fix for the keybinds
@@ -199,22 +250,6 @@ function Possess( Pawn aPawn )
     t_camShoulder     = tp_shoulder;
     t_camHeight       = tp_height;
     t_shoulderEased   = tp_shoulder;
-
-    // Use the host's synced camera tuning if the server has pushed it
-    // (replicated config override). Remote clients use the host's dist /
-    // shoulder / height / auto-fp instead of their own ini defaults.
-    if ( t_syncReady )
-    {
-        t_camDist     = t_syncDist;
-        t_camShoulder = t_syncShoulder;
-        t_camHeight   = t_syncHeight;
-        t_shoulderEased = t_shoulderSign * t_syncShoulder;
-        tp_auto_fp    = t_syncAutoFp;
-        if ( tp_debug )
-            Log( "GTA-TP: applied host-synced camera tuning dist="$t_syncDist
-                 $" shoulder="$t_syncShoulder$" height="$t_syncHeight
-                 $" autoFP="$t_syncAutoFp );
-    }
 
     t_bodyYaw         = Rotation.Yaw;
     t_bodyTargetYaw   = Rotation.Yaw;
@@ -289,32 +324,50 @@ simulated event PlayerTick( float DeltaTime )
 
     if ( Role == ROLE_Authority )
     {
-        // server: restamp sync vars every second from its own config
+        // server: restamp the full camera profile every second. Replication
+        // only sends vars that changed, so identical restamping is free —
+        // this catches host-side console/GUI config changes mid-game.
         if ( (Level.TimeSeconds - t_lastSyncEnforce) > 1.0 )
         {
             t_lastSyncEnforce = Level.TimeSeconds;
-            t_syncDist     = tp_dist;
-            t_syncShoulder = tp_shoulder;
-            t_syncHeight   = tp_height;
-            t_syncAutoFp   = tp_auto_fp;
-            t_syncReady    = true;
+            TP_StampSyncVars();
         }
     }
     else if ( t_syncReady
            && (Level.TimeSeconds - t_lastSyncEnforce) > 1.0
            && tp_enable )
     {
-        // client: enforce host-synced values every second once they've arrived
+        // client: adopt the host's FULL camera profile every second. Round 18:
+        // this writes ONLY the config (profile) vars — tp_* — and never the
+        // eased runtime camera state (t_camDist/t_camShoulder/t_shoulderEased).
+        // The round-15/16 version clobbered that runtime state every second,
+        // which "teleported" the camera back to the regular stance and made
+        // aim mode ease in, snap back, ease in again in a ~1 s loop (and with
+        // t_shoulderSign still 0 the shoulder eased target was 0 as well).
+        // Writing tp_* instead lets TP_SetCamParams ease the CURRENT stance
+        // toward the host profile naturally; the client's own ini is untouched
+        // (in-memory override for the session only).
         t_lastSyncEnforce = Level.TimeSeconds;
-        t_camDist     = t_syncDist;
-        t_camShoulder = t_syncShoulder;
-        t_camHeight   = t_syncHeight;
-        t_shoulderEased = t_shoulderSign * t_syncShoulder;
-        tp_auto_fp    = t_syncAutoFp;
+        tp_dist     = t_syncDist;
+        tp_shoulder = t_syncShoulder;
+        tp_height   = t_syncHeight;
+        tp_auto_fp  = t_syncAutoFp;
+        tp_aim_dist        = t_syncAimDist;
+        tp_aim_shoulder    = t_syncAimShoulder;
+        tp_aim_height      = t_syncAimHeight;
+        tp_crouch_dist     = t_syncCrouchDist;
+        tp_crouch_shoulder = t_syncCrouchShoulder;
+        tp_crouch_height   = t_syncCrouchHeight;
+        tp_fp_in      = t_syncFpIn;
+        tp_fp_out     = t_syncFpOut;
+        tp_easetime   = t_syncEaseTime;
+        tp_turnspeed  = t_syncTurnSpeed;
         if ( tp_debug )
-            Log( "GTA-TP: enforced host-synced camera tuning dist="$t_syncDist
-                 $" shoulder="$t_syncShoulder$" height="$t_syncHeight
-                 $" autoFP="$t_syncAutoFp );
+            Log( "GTA-TP: applied host camera profile dist="$tp_dist
+                 $" shoulder="$tp_shoulder$" height="$tp_height
+                 $" aim="$tp_aim_dist$"/"$tp_aim_shoulder$"/"$tp_aim_height
+                 $" crouch="$tp_crouch_dist$"/"$tp_crouch_shoulder$"/"$tp_crouch_height
+                 $" fp="$tp_fp_in$"/"$tp_fp_out$" autoFP="$tp_auto_fp );
     }
 
     Super.PlayerTick( DeltaTime );
@@ -881,20 +934,12 @@ function TP_SetCamParams( float dt )
     }
     else
     {
-        // Remote clients use the host's synced regular-stance values
-        // (replicated config override) instead of their own ini defaults.
-        if ( t_syncReady )
-        {
-            D = t_syncDist;
-            S = t_syncShoulder;
-            H = t_syncHeight;
-        }
-        else
-        {
-            D = tp_dist;
-            S = tp_shoulder;
-            H = tp_height;
-        }
+        // tp_* on a remote client carry the host's synced profile (written by
+        // the per-second enforcement in PlayerTick), so the plain config vars
+        // are the single source of truth for every machine.
+        D = tp_dist;
+        S = tp_shoulder;
+        H = tp_height;
     }
 
     t_camDist     = TP_FEase( t_camDist,     D, dt );
