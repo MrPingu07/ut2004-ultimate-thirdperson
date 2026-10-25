@@ -82,6 +82,8 @@ var transient bool  t_eF, t_eB, t_eL, t_eR, t_wasF, t_wasB, t_wasL, t_wasR;
 var transient eDoubleClickDir t_dblDir;  // our copy of PlayerInput's double click state
 var transient float t_dblTimer;          // (PlayerInput is private to Engine.PlayerController)
 var transient float t_lastReticleScan;   // throttle for the vehicle reticle mute scan
+var transient bool  t_behindViewSent;    // ClientSetBehindView(true) already sent post-login
+var transient float t_clientActivate;    // Level.TimeSeconds when ClientSetBehindView may be sent
 
 // Replication additions on top of the inherited xPlayer rules. The camera —
 // and with it the crosshair convergence ray — only exists on the machine that
@@ -173,17 +175,14 @@ function Possess( Pawn aPawn )
     t_unlockLogged    = false;
     t_aimValid        = false;
 
-    // bBehindView is not a replicated var: remote clients only ever receive a
-    // behind-view change through the stock ClientSetBehindView RPC (that is
-    // exactly what the stock SetBehindView exec does). Without this the mod
-    // looks like plain first person to every remote player. On foot only —
-    // vehicles own their camera (and stock's vehicle branch SaveConfig()s the
-    // pawn into an ini). The local host/standalone already got the direct
-    // assignment above; a client RPC is simply not executed there.
-    if ( tp_enable && (Level.NetMode != NM_Standalone) && (Vehicle(Pawn) == None) )
-        ClientSetBehindView( true );
-
-    // a fresh HUD shows the user's own crosshair again
+    // bBehindView is not a replicated var, so remote clients only ever receive a
+    // behind-view change through the stock ClientSetBehindView RPC. The direct
+    // assignment above covers the local host / standalone. For (remote) clients
+    // the RPC is deferred until after level load (t_clientActivate) — sending a
+    // reliable RPC from Possess/early PlayerTick, while the joining client is
+    // still toggling fullscreen and creating the D3D device, can freeze it.
+    t_behindViewSent = false;
+    t_clientActivate = Level.TimeSeconds + 3.0;
 
     if ( tp_debug )
         Log( "GTA-TP: Possess pawn="$aPawn$" controller="$Class
@@ -204,6 +203,26 @@ simulated event PlayerTick( float DeltaTime )
     // value leaked into the vehicle the whole time.
     bFreeCamera = tp_enable && (Pawn != None) && (Vehicle(Pawn) == None)
                   && bBehindView && !t_fpLock;
+
+    // Deferred third-person activation for (remote) clients. bBehindView is not
+    // replicated, so the client learns about it via the ClientSetBehindView RPC.
+    // The RPC is only sent once t_clientActivate (3 s after Possess) has passed,
+    // i.e. after the joining client has finished level load and D3D device
+    // creation. Sending a reliable RPC while the client is still toggling
+    // fullscreen / creating the D3D device can freeze it. Retries every frame
+    // until sent, so a transient condition miss (e.g. ViewTarget not yet the
+    // pawn) doesn't drop the activation.
+    if ( !t_behindViewSent
+         && Level.TimeSeconds >= t_clientActivate
+         && Role == ROLE_Authority
+         && tp_enable && (Level.NetMode != NM_Standalone)
+         && (Vehicle(Pawn) == None) && bBehindView && (ViewTarget == Pawn) )
+    {
+        t_behindViewSent = true;
+        ClientSetBehindView( true );
+        if ( tp_debug )
+            Log( "GTA-TP: deferred ClientSetBehindView(true) sent" );
+    }
 
     if ( tp_enable && ((Level.TimeSeconds - t_lastReticleScan) > 1.0) )
     {

@@ -23,6 +23,14 @@ if ! grep -q "^EditPackages=$PKG$" "$SYS/UT2004.ini"; then
     echo "Added EditPackages=$PKG to UT2004.ini"
 fi
 
+# --- advertise it to joining clients ---------------------------------------
+# UT2004 only reads ServerPackages at server startup; the client needs the
+# package to resolve GTAPlayerController on join, otherwise "Connection Lost".
+if ! grep -q "^ServerPackages=$PKG$" "$SYS/UT2004.ini"; then
+    sed -i "/^ServerPackages=AssaultBP/a ServerPackages=$PKG" "$SYS/UT2004.ini"
+    echo "Added ServerPackages=$PKG to UT2004.ini — restart the server to take effect"
+fi
+
 # --- compile (fresh) --------------------------------------------------------
 rm -f "$SYS/$PKG.u"
 cd "$SYS"

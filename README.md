@@ -187,10 +187,14 @@ UnrealScript.
 Primary use is instant action, but the mod is written so a listen-server works;
 tested/verified behaviour and known limits:
 
-- The mutator must be installed (`.u`/`.int`) on **both** the server and every
-  joining client (no redirect configured — share the files, e.g. in a LAN
-  install). Joining clients download/get the package through UT2004's normal
-  mechanism or just copy these three files next to their `System/`.
+- The mutator must be installed (`.u`/`.int`/`.ucl`) on **both** the server and every
+  joining client. Joining clients download/get the package through UT2004's normal
+  mechanism, **or just copy these three files next to their `System/`**.
+- **Server config:** add `ServerPackages=GTAThirdPerson` to the server's
+  `System/UT2004.ini` (`[Engine.Engine]`) and **restart the server** so it advertises
+  the package — otherwise joining clients never download it and get "Connection Lost"
+  when the server spawns them with `GTAThirdPerson.GTAPlayerController`. `build.sh`
+  handles this automatically (see Install).
 - The third-person view is pushed to joining clients with the stock
   `ClientSetBehindView` replication path, so remote players get the orbit
   camera, keybinds and their **own local tuning** (each client's ini applies).
@@ -255,8 +259,9 @@ resolves the class — verified against the stock sources).
   player-chosen) crosshair stays valid and no HUD replacement is needed.
 
 Known limitations: first-person `AdjustAim` scanning (aiming help) is stock
-and only active in first person; thrown weapons keep stock yaw behaviour; not
-yet tested on dedicated servers with remote clients.
+and only active in first person; thrown weapons keep stock yaw behaviour; the
+`ServerPackages=GTAThirdPerson` server ini entry (+ server restart) is
+mandatory for remote clients to download the package and join.
 
 ## Repo layout
 

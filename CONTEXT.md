@@ -679,3 +679,44 @@ README MP section's "Aim difference" limitation replaced by the streaming
 description.
 
 Rebuilt (0 errors/warnings), reinstalled, smoke clean (0 criticals).
+
+### 2026-10-25 — round 14: joining client freeze fixed + ServerPackages requirement
+
+Report: a client connecting from LAN to a listen server with the mutator enabled
+freezes (effectively crashes) at level load.
+
+Diagnosis (client log /home/jdmr/Proyectos/clientlog.txt, then UT2004.log):
+
+- The freeze was native: `xD3D9Helper::Init` during the joining client's
+  fullscreen↔windowed D3D device creation. Zero script errors, zero `GTA-TP:`
+  lines before the hang.
+- Root cause: `bBehindView` is not replicated, so the mod tells remote clients
+  to go third person via the stock `ClientSetBehindView(true)` reliable RPC.
+  That RPC was sent from `Possess()` / the first `PlayerTick()` — while the
+  client was still toggling fullscreen and creating the D3D device — and on
+  that client's Wine + Intel HD Graphics 4000 setup it hung device creation.
+- Fix: deferred the `ClientSetBehindView(true)` RPC to 3 seconds after
+  `Possess()` (past level load / D3D init), via a `t_clientActivate` stamp and
+  a one-shot gate in `PlayerTick()` retried every frame until sent. `Possess()`
+  still sets `bBehindView = tp_enable` directly (covers local host / standalone).
+- Rebuilt: 0 errors / 0 warnings. Client now gets past `xD3D9Helper::Init`
+  and joins; server log confirms `GTA-TP: deferred ClientSetBehindView(true) sent`
+  after level load, then the client enters third person.
+
+Separate discovery — client never received the package:
+
+- The client joined, loaded the level, then got "Connection Lost" because the
+  server never advertised `GTAThirdPerson` in `ServerPackages`
+  (`UT2004.ini`, `[Engine.Engine]`), so UT2004 never offered the client the
+  `GTAThirdPerson.u` download. Without the package the client can't resolve
+  `GTAThirdPerson.GTAPlayerController` and is rejected.
+- Fix: added `ServerPackages=GTAThirdPerson` to the server ini and restarted
+  the server. `tools/build.sh` now registers both `EditPackages` and
+  `ServerPackages` automatically (server restart still required for
+  `ServerPackages` to take effect). Clients auto-download the package on
+  connect after that.
+
+README MP section updated with the `ServerPackages` requirement; "not yet tested
+on dedicated servers with remote clients" limitation replaced by this finding.
+
+Client joined successfully with the mutator enabled after both fixes.
