@@ -207,6 +207,11 @@ tested/verified behaviour and known limits:
   client's view rotation. Keys and tuning remain per-machine as described.
 - The body-facing fix is server-authoritative (pawn rotation replicates to
   everyone), so other players see the body turning toward your movement.
+- **Camera config sync:** the server's `tp_dist`/`tp_shoulder`/`tp_height`/
+  `tp_auto_fp` are replicated to joining clients, so remote players use the
+  host's camera tuning instead of their own ini defaults (or compiled
+  defaults). Server-side console changes to these values reach clients through
+  the same replication path.
 
 ## How it works
 
@@ -259,9 +264,7 @@ resolves the class — verified against the stock sources).
   player-chosen) crosshair stays valid and no HUD replacement is needed.
 
 Known limitations: first-person `AdjustAim` scanning (aiming help) is stock
-and only active in first person; thrown weapons keep stock yaw behaviour; the
-`ServerPackages=GTAThirdPerson` server ini entry (+ server restart) is
-mandatory for remote clients to download the package and join.
+and only active in first person; thrown weapons keep stock yaw behaviour.
 
 ## Repo layout
 

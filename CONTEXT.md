@@ -720,3 +720,23 @@ README MP section updated with the `ServerPackages` requirement; "not yet tested
 on dedicated servers with remote clients" limitation replaced by this finding.
 
 Client joined successfully with the mutator enabled after both fixes.
+
+### 2026-10-25 — round 15: server→client camera config sync
+
+Report: joining clients used their own (or default) `tp_dist`/`tp_shoulder`/`tp_height`
+instead of the host's values — e.g. a client with no tuned ini started with
+shoulder=0 instead of the host's 30.
+
+Root cause: camera settings are `config` vars, which UT2004 does **not**
+replicate. Each machine loads them from its own `GTAThirdPerson.ini`. The
+mutator's `TP_PushToController()` only sets class defaults on the machine it
+runs on (server or client), never across the network.
+
+Fix: added replicated mirror vars `t_syncDist`, `t_syncShoulder`, `t_syncHeight`,
+`t_syncAutoFp`, `t_syncReady`. The server stamps them from its own config in
+`PostBeginPlay()`; they replicate reliably server→clients. Clients apply them
+in `Possess()` (overriding local ini defaults for dist/shoulder/height/auto-FP)
+and `TP_SetCamParams()` uses them as easing targets for the regular stance so
+host-driven console changes reach clients too.
+
+Rebuilt: 0 errors / 0 warnings.

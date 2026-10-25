@@ -85,6 +85,16 @@ var transient float t_lastReticleScan;   // throttle for the vehicle reticle mut
 var transient bool  t_behindViewSent;    // ClientSetBehindView(true) already sent post-login
 var transient float t_clientActivate;    // Level.TimeSeconds when ClientSetBehindView may be sent
 
+// Server-synced camera values, replicated to joining clients so they use the
+// host's tuning instead of their own (or default) config values. config vars
+// are not replicated in UT2004, so we mirror them here. Set once by the server
+// in PostBeginPlay from its own ini values; clients apply them in Possess().
+var float  t_syncDist;        // synced tp_dist
+var float  t_syncShoulder;    // synced tp_shoulder
+var float  t_syncHeight;      // synced tp_height
+var bool   t_syncAutoFp;      // synced tp_auto_fp
+var bool   t_syncReady;       // true once the server has stamped the above
+
 // Replication additions on top of the inherited xPlayer rules. The camera —
 // and with it the crosshair convergence ray — only exists on the machine that
 // renders it, but the shots resolve server-side (AdjustAim). While in third
@@ -97,6 +107,11 @@ replication
 {
     unreliable if ( Role < ROLE_Authority )
         ServerTPAimPoint;
+    // Server pushes its camera tuning to joining clients so they use the host's
+    // values instead of their own (or default) config values. config vars are
+    // not replicated in UT2004, hence these mirrored replicated vars.
+    reliable if ( Role == ROLE_Authority )
+        t_syncDist, t_syncShoulder, t_syncHeight, t_syncAutoFp, t_syncReady;
 }
 
 const TP_BINDVERSION = 2;
@@ -129,6 +144,20 @@ simulated event PostBeginPlay()
         SaveConfig();
         if ( tp_debug )
             Log( "GTA-TP: config migrated (turnspeed to deg/s if needed, shoulder to 30)" );
+    }
+
+    // Stamp the server's camera tuning into replicated sync vars so joining
+    // clients use the host's values instead of their own (or default) config.
+    // config vars are not replicated in UT2004. On the local host / standalone
+    // this is a no-op for the local player (Role == Authority, no replication
+    // to self), but the direct config values are used there anyway.
+    if ( Role == ROLE_Authority )
+    {
+        t_syncDist     = tp_dist;
+        t_syncShoulder = tp_shoulder;
+        t_syncHeight   = tp_height;
+        t_syncAutoFp   = tp_auto_fp;
+        t_syncReady    = true;
     }
 }
 
@@ -167,6 +196,23 @@ function Possess( Pawn aPawn )
     t_camShoulder     = tp_shoulder;
     t_camHeight       = tp_height;
     t_shoulderEased   = tp_shoulder;
+
+    // Use the host's synced camera tuning if the server has pushed it
+    // (replicated config override). Remote clients use the host's dist /
+    // shoulder / height / auto-fp instead of their own ini defaults.
+    if ( t_syncReady )
+    {
+        t_camDist     = t_syncDist;
+        t_camShoulder = t_syncShoulder;
+        t_camHeight   = t_syncHeight;
+        t_shoulderEased = t_shoulderSign * t_syncShoulder;
+        tp_auto_fp    = t_syncAutoFp;
+        if ( tp_debug )
+            Log( "GTA-TP: applied host-synced camera tuning dist="$t_syncDist
+                 $" shoulder="$t_syncShoulder$" height="$t_syncHeight
+                 $" autoFP="$t_syncAutoFp );
+    }
+
     t_bodyYaw         = Rotation.Yaw;
     t_bodyTargetYaw   = Rotation.Yaw;
     t_bodyTargetValid = false;
@@ -748,9 +794,20 @@ function TP_SetCamParams( float dt )
     }
     else
     {
-        D = tp_dist;
-        S = tp_shoulder;
-        H = tp_height;
+        // Remote clients use the host's synced regular-stance values
+        // (replicated config override) instead of their own ini defaults.
+        if ( t_syncReady )
+        {
+            D = t_syncDist;
+            S = t_syncShoulder;
+            H = t_syncHeight;
+        }
+        else
+        {
+            D = tp_dist;
+            S = tp_shoulder;
+            H = tp_height;
+        }
     }
 
     t_camDist     = TP_FEase( t_camDist,     D, dt );
