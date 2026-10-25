@@ -46,6 +46,23 @@ Extract this zip into your UT2004 directory. It adds three files to System/:
 Then pick the mutator "GTA-SA Third Person Camera" in the mutator list of
 any Instant Action / network match.
 
+Network play (host requirements!)
+---------------------------------
+To be joined over a LAN, the machine that HOSTS the match must advertise the
+package in System/UT2004.ini, under [Engine.GameEngine]:
+
+  ServerPackages=GTAThirdPerson
+
+UT2004 reads that list ONLY at server startup: add/change it, then restart
+the host game. Since v1.5 the mutator appends this line itself on the first
+server boot if it is missing (and logs a reminder to restart) — but verify
+with:  grep ServerPackages System/UT2004.ini
+
+Every boot logs its package build on both ends: "GTA-TP: package version <N>"
+— if two machines disagree on joining, copy the .u AND .ucl from one System/
+to the other so the numbers match (asymmetric installs can freeze a joining
+client silently).
+
 Keys (applied automatically, rebindable in Settings > Controls)
 --------------------------------------------------------------
   Z    first <-> third person toggle
