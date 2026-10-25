@@ -142,7 +142,7 @@ const TP_CFGVERSION = 4;
 // across them can hang the client at actor-channel load with NO error string.
 // A one-line `grep "package version"` in both logs proves parity or condemns
 // the stale install. Bump this together with every behavior-affecting round.
-const TP_MODVERSION = 20;
+const TP_MODVERSION = 21;
 
 simulated event PostBeginPlay()
 {

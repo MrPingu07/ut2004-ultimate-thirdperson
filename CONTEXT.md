@@ -883,3 +883,41 @@ New package md5 (round 20): da1a2544097e106fc9f6eb107c175efe (.u), the .ucl
 must be copied alongside it (de8f0d61…).
 
 Rebuilt: 0 errors / 0 warnings.
+
+### 2026-10-25 — round 21: ROOT CAUSE of the client-join freeze — missing ServerPackages on the host; automatic self-registration
+
+Resolution of the rounds 14-20 saga: the swapped pair (desktop joins
+laptop-hosted SpaceNoxx) froze every time while instant action on the same
+machine/map/bot count ran flawless. The frozen client died before ANY
+client-side mod code ran (no seed line, no precache line, no downloads), and
+the round-14 deferred ClientSetBehindView RPC never reached it (no "deferred
+sent" addressed to the remote, twice).
+
+Adding ServerPackages=GTAThirdPerson to the LAPTOP's UT2004.ini
+([Engine.GameEngine]) — the host for the failing tests — FIXED the join
+instantly. Round 14's RPC deferral was a red herring all along: the actual
+round-14 fix was the same ini line added to the desktop's ini (then host).
+
+Code (GTAThirdPersonMutator):
+- TP_EnsureServerPackage(): on every server boot with the mod active, scan
+  class'Engine.GameEngine'.default.ServerPackages (dynamic array; verified by
+  UCC compiling cleanly) and, if "GTAThirdPerson" is absent, append it and
+  StaticSaveConfig() the class defaults (writes [Engine.GameEngine] in the
+  host's UT2004.ini). UT2004 reads the list only at server startup, so the
+  reg: takes effect on the NEXT start; logged loudly accordingly.
+
+Docs:
+- README "Install" now opens with a big REQUIRED-to-host warning block:
+  the symptom is a silent mid-load freeze (not Connection Lost), ini location
+  [Engine.GameEngine], restart requirement, the grep verification, and the
+  auto-registration from round 21.
+- Multiplayer bullets updated: correct failure description + keep .u/.ucl
+  byte-identical + version-stamp grep.
+
+Sandbox verification (temp ini, headless UCC server): removed the line, one
+boot appended it back at exactly the same spot; rewritten ini byte-identical
+to the original otherwise (diff = only that line).
+
+Rebuilt: 0 errors / 0 warnings (round-21 .u md5 7bb1cd4ab8fccc8a74b79c36611
+...dbf13; also confirm the round-20 changes: version stamp 21, remote-only
+deferral gate, "convergence unused" diagnostic with gate reasons).

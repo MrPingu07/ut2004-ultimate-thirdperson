@@ -39,6 +39,17 @@ class GTAThirdPersonMutator extends Mutator
 // class defaults (which already mirror its own ini values at load) and
 // replicates the controller's turn/shoulder migration math when its ini is
 // still pre-migration, so no user tuning is lost on the way in.
+//
+// Round 21 (TP_EnsureServerPackage): self-registers ServerPackages=
+// GTAThirdPerson in the HOST's System/UT2004.ini ([Engine.GameEngine]) so a
+// fresh host install advertised the package to joining clients without any
+// manual ini editing. This was THE root cause of the long-running
+// "joining client freezes" (rounds 14-20): with the line missing on the host,
+// clients hard-froze mid-load, silently, before ANY client-side mod code ran
+// (no seed line, no precache, no disconnect). Two hosts + swapped roles never
+// joined until the line was added by hand on the host. UT2004 reads
+// ServerPackages only at server startup, so a first-run append takes effect
+// after the NEXT server start; we log that loudly.
 
 var config bool  bEnabled;               // master: install the controller
 
@@ -58,6 +69,10 @@ function PostBeginPlay()
     if ( tp_cfgver < TP_MIRRORVER )
         TP_InitMirror();
 
+    // Round 21: make the host ini advertise the package (see class comment).
+    if ( bEnabled )
+        TP_EnsureServerPackage();
+
     if ( Level.Game != None && bEnabled )
     {
         Level.Game.PlayerControllerClassName = "GTAThirdPerson.GTAPlayerController";
@@ -65,6 +80,27 @@ function PostBeginPlay()
 
         TP_PushToController();
     }
+}
+
+// Appends ServerPackages=GTAThirdPerson to [Engine.GameEngine] in the host's
+// UT2004.ini if absent. Writes the class's config defaults via
+// StaticSaveConfig() (same idiom TP_PushToController uses). Takes effect on
+// the NEXT server start, because UT2004 reads ServerPackages only at startup.
+function TP_EnsureServerPackage()
+{
+    local class<GameEngine> GE;
+    local int i;
+
+    GE = class'Engine.GameEngine';
+    for ( i = 0; i < GE.default.ServerPackages.Length; i++ )
+        if ( GE.default.ServerPackages[i] ~= "GTAThirdPerson" )
+            return;
+
+    i = GE.default.ServerPackages.Length;
+    GE.default.ServerPackages[i] = "GTAThirdPerson";
+    GE.static.StaticSaveConfig();
+    Log( "GTA-TP: host UT2004.ini had no ServerPackages=GTAThirdPerson — appended under [Engine.GameEngine]" );
+    Log( "GTA-TP: UT2004 reads ServerPackages only at server startup — RESTART the game (clients froze at join without it: rounds 14-20)" );
 }
 
 // One-time copy of the controller's tunings into this ini's mirror, with the

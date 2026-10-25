@@ -150,7 +150,41 @@ GUI page and/or console commands above; also in the **mutator** ini section.)
 ## Install
 
 The repo symlinks its source into the game directory, so the compiler sees it.
-## Install
+
+> ### ⚠️ REQUIRED to host a network match — read this before joining tests
+>
+> The **host's** `System/UT2004.ini` must advertise the mutator package, or
+> joining clients **hard-freeze mid-load** (UE2 dies at the class handshake:
+> no error, no disconnect message, the client log just stops before
+> `Precaching:` — see the round 14–20 saga in CONTEXT.md):
+>
+> ```ini
+> [Engine.GameEngine]
+> ...
+> ServerPackages=GTAThirdPerson
+> ```
+>
+> UT2004 reads this list **only at server startup**, so a freshly added line
+> (or the automatic registration below) takes effect **after the next server
+> start**. Verify on the host:
+>
+> ```
+> grep ServerPackages System/UT2004.ini
+> ```
+>
+> From **round 21** the mod self-registers this line on its first server
+> boot: if `ServerPackages=GTAThirdPerson` is missing, the mutator appends it
+> under `[Engine.GameEngine]` and logs
+> `GTA-TP: host UT2004.ini had no ServerPackages=GTAThirdPerson — appended ...`.
+> Older installs (and every machine you copy `.u` files to by hand) still
+> need the edit, prefixed by a game restart.
+>
+> This exact line was the root cause of months of "joining client freeze"
+> reports across two machines: the round-14 fly RPC deferral never mattered
+> — frozen clients never received a single RPC; they died before any
+> client-side mod code ran. Also keep `.u`/`.ucl` copies **byte-identical on
+> both machines** (see Multiplayer) — each boot logs
+> `GTA-TP: package version <N>` on both ends; the two numbers must match.
 
 Two options:
 
@@ -199,11 +233,18 @@ tested/verified behaviour and known limits:
   machines before testing. Verify with the round-20 version stamp: each boot
   logs `GTA-TP: package version <N>` next to the player seed line —
   `grep "package version" UT2004.log` on both sides must print the same number.
-- **Server config:** add `ServerPackages=GTAThirdPerson` to the server's
-  `System/UT2004.ini` (`[Engine.Engine]`) and **restart the server** so it advertises
-  the package — otherwise joining clients never download it and get "Connection Lost"
-  when the server spawns them with `GTAThirdPerson.GTAPlayerController`. `build.sh`
-  handles this automatically (see Install).
+- **Server config (mandatory for hosting):** add `ServerPackages=GTAThirdPerson`
+  to the host's `System/UT2004.ini` **under `[Engine.GameEngine]`** and restart
+  the game — the list is read only at server startup. Since round 21 the mutator
+  appends the line itself on first server boot if it is missing. Without the
+  line the symptom is NOT "Connection Lost": the joining client
+  silently hard-freezes mid-load before precache (proven with swapped host
+  roles on 2026-10-25 — the round 14–20 freeze was this exact config gap
+  on the host that never got it).
+- **Keep `.u`/`.ucl` byte-identical on host and clients.** Copies that drift
+  are asymmetric class layouts and can freeze a joining client just as
+  quietly. Each boot seals its log with `GTA-TP: package version <N>` on
+  both ends — compare the numbers once per machine per session.
 - The third-person view is pushed to joining clients with the stock
   `ClientSetBehindView` replication path, so remote players get the orbit
   camera, keybinds and their **own local tuning** (each client's ini applies).
