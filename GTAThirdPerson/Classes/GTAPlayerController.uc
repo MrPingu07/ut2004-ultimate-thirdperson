@@ -94,6 +94,7 @@ var float  t_syncShoulder;    // synced tp_shoulder
 var float  t_syncHeight;      // synced tp_height
 var bool   t_syncAutoFp;      // synced tp_auto_fp
 var bool   t_syncReady;       // true once the server has stamped the above
+var transient float t_lastSyncEnforce;  // throttle for client-side sync enforcement
 
 // Replication additions on top of the inherited xPlayer rules. The camera —
 // and with it the crosshair convergence ray — only exists on the machine that
@@ -274,6 +275,44 @@ simulated event PlayerTick( float DeltaTime )
     {
         t_lastReticleScan = Level.TimeSeconds;
         TP_MuteVehReticles();
+    }
+
+    // ---- authoritative server→client camera config sync ----
+    // config vars are not replicated in UT2004, so the server pushes its
+    // tp_dist/tp_shoulder/tp_height/tp_auto_fp to joining clients via the
+    // replicated mirror vars above. Replication can arrive after Possess(),
+    // so enforcement is retried periodically on the client (not just once).
+    // The server also restamps periodically to propagate config changes made
+    // during gameplay (console commands / GUI edits).
+
+    if ( Role == ROLE_Authority )
+    {
+        // server: restamp sync vars every second from its own config
+        if ( (Level.TimeSeconds - t_lastSyncEnforce) > 1.0 )
+        {
+            t_lastSyncEnforce = Level.TimeSeconds;
+            t_syncDist     = tp_dist;
+            t_syncShoulder = tp_shoulder;
+            t_syncHeight   = tp_height;
+            t_syncAutoFp   = tp_auto_fp;
+            t_syncReady    = true;
+        }
+    }
+    else if ( t_syncReady
+           && (Level.TimeSeconds - t_lastSyncEnforce) > 1.0
+           && tp_enable )
+    {
+        // client: enforce host-synced values every second once they've arrived
+        t_lastSyncEnforce = Level.TimeSeconds;
+        t_camDist     = t_syncDist;
+        t_camShoulder = t_syncShoulder;
+        t_camHeight   = t_syncHeight;
+        t_shoulderEased = t_shoulderSign * t_syncShoulder;
+        tp_auto_fp    = t_syncAutoFp;
+        if ( tp_debug )
+            Log( "GTA-TP: enforced host-synced camera tuning dist="$t_syncDist
+                 $" shoulder="$t_syncShoulder$" height="$t_syncHeight
+                 $" autoFP="$t_syncAutoFp );
     }
 
     Super.PlayerTick( DeltaTime );

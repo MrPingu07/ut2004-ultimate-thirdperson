@@ -740,3 +740,22 @@ and `TP_SetCamParams()` uses them as easing targets for the regular stance so
 host-driven console changes reach clients too.
 
 Rebuilt: 0 errors / 0 warnings.
+
+### 2026-10-25 — round 16: camera config sync made authoritative (periodic enforcement)
+
+Round 15's one-shot `Possess()` apply was insufficient: replication arrives
+after `Possess()` on the client, so `t_syncReady` was still false and the
+client kept using its own ini defaults (shoulder=0 instead of the host's 30).
+
+Fix: made the sync authoritative with periodic enforcement every 1000ms in
+`PlayerTick()`:
+- **Server** (`Role == ROLE_Authority`): restamps `t_syncDist`/`t_syncShoulder`/
+  `t_syncHeight`/`t_syncAutoFp`/`t_syncReady` from its own config every second,
+  so config changes during gameplay (console commands / GUI edits) propagate
+  to clients too.
+- **Client** (`Role < ROLE_Authority`): once `t_syncReady` arrives via
+  replication, enforces the host-synced dist/shoulder/height/auto-FP every
+  second, overriding local ini defaults. Handles late-arriving replication
+  and mid-game config changes.
+
+Rebuilt: 0 errors / 0 warnings.
