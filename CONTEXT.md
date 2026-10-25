@@ -810,3 +810,32 @@ floats + `t_syncReady`. `TP_SetCamParams`'s round-15 t_sync override was
 reverted (tp_* is now the single source of truth on every machine).
 
 Rebuilt: 0 errors / 0 warnings.
+
+### 2026-10-25 — round 19: remote shot accuracy — dead-reckoned convergence + wider freshness gate
+
+Report: client shots drift relative to the crosshair more than the host's.
+
+Cause: AdjustAim resolves server-side, so a remote player's shots are aimed at
+the last convergence point streamed from the client — same-frame on the host,
+but one or several frames late for remotes over the unreliable stream (and the
+stock parallax fallback after a 0.2 s lapse, e.g. packet loss on Wi-Fi).
+
+Fix:
+- `ServerTPAimPoint` now samples the point's velocity (teleport-sized deltas
+  ignored, >5k s/s discarded) when a plausible interval arrives.
+- `AdjustAim`'s convergence branch advances the point to the moment of firing:
+  `t_aimPoint + t_aimVel * min(age, 0.1)`. On the local host age ≈ 0 and no
+  velocity is tracked, so it is a no-op there.
+- Freshness gate widened 0.2 -> 0.35 s: a slightly stale convergence point
+  still aims at what the crosshair painted recently, which beats the stock
+  third-person parallax path; dead reckoning is capped so long gaps never
+  lead far.
+- tp_debug diagnostic: logs when a known-but-stale convergence point is
+  dismissed and a shot takes the stock path (stream lapse detection).
+
+Remaining inherent limit (documented): remote clients see other pawns at their
+replicated interpolation positions, so the crosshair point on a fast-moving
+target lags the server's authoritative position by ~ping/2 — not fixable from
+scripts; it is small on LAN.
+
+Rebuilt: 0 errors / 0 warnings.

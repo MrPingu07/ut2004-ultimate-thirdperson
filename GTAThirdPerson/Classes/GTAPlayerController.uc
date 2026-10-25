@@ -77,6 +77,7 @@ var transient bool  t_unlockLogged;
 var transient vector t_aimPoint;         // convergence point of the shots (world)
 var transient bool   t_aimValid;         // t_aimPoint was computed/streamed recently
 var transient float  t_aimRecv;          // when t_aimPoint was locally computed or streamed in
+var transient vector t_aimVel;           // server-side dead-reckoning velocity of t_aimPoint
 var transient vector t_camOrigin;        // camera origin of the last view
 var transient bool  t_eF, t_eB, t_eL, t_eR, t_wasF, t_wasB, t_wasL, t_wasR;
 var transient eDoubleClickDir t_dblDir;  // our copy of PlayerInput's double click state
@@ -874,8 +875,21 @@ function TP_CalcAimPoint( vector Origin, vector Dir )
 
 // Server-side copy of the client's crosshair convergence point. Executed only
 // where the controller is authoritative (clients cannot even run the body).
+// Also samples the point's velocity for dead reckoning in AdjustAim: the shot
+// resolves a stream-latency later than the click, and on a moving crosshair
+// that lag is the difference between hitting the crosshair and trailing it.
 function ServerTPAimPoint( vector Aim )
 {
+    local float dt;
+    local vector NewVel;
+
+    dt = Level.TimeSeconds - t_aimRecv;
+    if ( dt > 0.002 && dt < 0.25 )
+    {
+        NewVel = (Aim - t_aimPoint) / dt;
+        if ( VSize(NewVel) < 5000.0 )    // ignore teleport-sized deltas (respawn/teleporter)
+            t_aimVel = NewVel;
+    }
     t_aimPoint = Aim;
     t_aimValid = true;
     t_aimRecv  = Level.TimeSeconds;
@@ -966,11 +980,16 @@ function float TP_FEase( float Current, float Target, float dt )
 // Conditions under which the third person convergence aim is active (shots
 // are aimed at the point the camera ray hits, t_aimPoint). The validity flag
 // matters in multiplayer (AdjustAim runs server-side, the camera client-side),
-// and the freshness gate switches remote players back to the stock aim branch if their stream lapses (e.g. in first person, auto-FP locked, dead).
+// and the freshness gate switches remote players back to the stock aim branch
+// if their stream lapses for a long time (e.g. first person, auto-FP locked,
+// dead). Round 19: widened 0.2 -> 0.35 s — a somewhat stale convergence point
+// still aims at what the crosshair painted recently, which beats the stock
+// third-person parallax fallback on lossy links; combined with dead reckoning
+// (capped at 0.1 s beyond the sample age) long gaps no longer lead wild.
 // Listen servers and standalone keep it always fresh (local camera machine).
 simulated function bool TP_ShootConvergence()
 {
-    return tp_enable && t_aimValid && (Level.TimeSeconds - t_aimRecv < 0.2)
+    return tp_enable && t_aimValid && (Level.TimeSeconds - t_aimRecv < 0.35)
            && bBehindView && !t_fpLock && (Pawn != None)
            && (Vehicle(Pawn) == None) && (Pawn.Health > 0);
 }
@@ -991,9 +1010,28 @@ function rotator AdjustAim( FireProperties FiredAmmunition, vector projStart, in
     local actor HitActor;
     local bool bNoZAdjust, bLeading;
     local rotator AimRot;
+    local float AimAge, StaleAge;
 
     if ( TP_ShootConvergence() )
-        return rotator( t_aimPoint - projStart );
+    {
+        // Round 19: aim at the convergence point advanced to the moment of
+        // firing. On the host the sample is same-frame (age ≈ 0, velocity not
+        // tracked) so this is a no-op locally; for remote players it advances
+        // the streamed point to roughly where the client's crosshair is NOW,
+        // removing the trail-behind the one-frame-late stream otherwise left.
+        AimAge = Level.TimeSeconds - t_aimRecv;
+        AimSpot = t_aimPoint;
+        if ( AimAge > 0.0 && t_aimVel != vect(0,0,0) )
+            AimSpot += t_aimVel * FMin( AimAge, 0.1 );
+        return rotator( AimSpot - projStart );
+    }
+
+    // Round 19 diagnostic (tp_debug): a known convergence point was DISMISSED
+    // by the freshness gate — the unreliable stream lapsed (packet loss) and
+    // this shot took the stock parallax-prone path instead.
+    StaleAge = Level.TimeSeconds - t_aimRecv;
+    if ( tp_debug && t_aimValid && StaleAge > 0.0 && StaleAge < 0.75 )
+        Log( "GTA-TP: shot on stock aim path, convergence stale (age="$StaleAge$" s)" );
 
     FireDir = vector(Rotation);
     if ( FiredAmmunition.bInstantHit )
