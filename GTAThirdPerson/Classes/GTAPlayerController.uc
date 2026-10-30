@@ -84,6 +84,22 @@ var transient eDoubleClickDir t_dblDir;  // our copy of PlayerInput's double cli
 var transient float t_dblTimer;          // (PlayerInput is private to Engine.PlayerController)
 var transient float t_lastReticleScan;   // throttle for the vehicle reticle mute scan
 var transient bool  t_behindViewSent;    // round-22: one-shot remote ClientSetBehindView(true) sender
+var bool            t_viewPrefSet;       // round-24: a view preference has been recorded
+var bool            t_viewPrefBehind;    // round-24: remembered view (true = third person)
+var transient Pawn  t_viewPawn;          // round-25: pawn the view was last applied to (local copy)
+var transient bool  t_viewPawnArmed;     // round-25: re-assertion window armed for this pawn
+var transient float t_viewReassertUntil; // round-25: keep re-asserting the view until this time
+
+// ------ scope / guided-mode forced-first-person memory ------
+// When a scope (sniper rifle etc.) or the Redeemer guided mode is used we force
+// first person, remember which view we were in (third person or first person),
+// and put the player back to that view when the scope/guide ends.
+var transient bool  t_scopeActive;     // we forced first person because a scope/zoom is active
+var transient bool  t_scopeWasBehind;  // bBehindView before the scope forced first person
+var transient bool  t_scopeWasFpLock;  // t_fpLock before the scope forced first person
+var transient bool  t_guideActive;     // guiding a Redeemer warhead (camera follows the missile)
+var transient bool  t_guideWasBehind;  // bBehindView before redeemer guidance started
+var transient bool  t_guideWasFpLock;  // t_fpLock before redeemer guidance started
 
 // Server-synced camera values, replicated to joining clients so they use the
 // host's tuning instead of their own (or default) config values. config vars
@@ -120,6 +136,13 @@ replication
 {
     unreliable if ( Role < ROLE_Authority )
         ServerTPAimPoint;
+    // Round 24: a remote client owns its own bBehindView (PlayerCalcView runs
+    // there), but the server also needs to know the chosen view: it decides the
+    // view on respawn, drives the server-side bFreeCamera pawn facing, and is
+    // the only side that can send ClientSetBehindView to a remote. The toggle
+    // used to be a purely local exec, so the server never learned it.
+    reliable if ( Role < ROLE_Authority )
+        ServerTPViewPref;
     // Server pushes its camera tuning to joining clients so they use the host's
     // values instead of their own (or default) config values. config vars are
     // not replicated in UT2004, hence these mirrored replicated vars.
@@ -128,6 +151,12 @@ replication
         t_syncAimDist, t_syncAimShoulder, t_syncAimHeight,
         t_syncCrouchDist, t_syncCrouchShoulder, t_syncCrouchHeight,
         t_syncFpIn, t_syncFpOut, t_syncEaseTime, t_syncTurnSpeed;
+    // NOTE: t_viewPrefSet/t_viewPrefBehind are deliberately NOT replicated
+    // (round 25). Each machine owns its own copy: the server's comes from
+    // Possess + ServerTPViewPref, the client's from its own TP_Toggle. Letting
+    // the server push it back could overwrite the client's fresh choice with a
+    // stale value at exactly the wrong moment, and the client re-applies its
+    // own choice locally on every pawn change anyway.
 }
 
 const TP_BINDVERSION = 2;
@@ -141,7 +170,7 @@ const TP_CFGVERSION = 4;
 // across them can hang the client at actor-channel load with NO error string.
 // A one-line `grep "package version"` in both logs proves parity or condemns
 // the stale install. Bump this together with every behavior-affecting round.
-const TP_MODVERSION = 22;
+const TP_MODVERSION = 25;
 
 simulated event PostBeginPlay()
 {
@@ -184,10 +213,11 @@ simulated event PostBeginPlay()
     // cam-state dump as "sign=0 shoulderEased=0.00"), which rendered a camera
     // with NO side offset — the original "client has no shoulder" report —
     // while every synced value in the logs looked fine. bBehindView is
-    // deliberately NOT seeded here: third-person activation on remote clients
-    // goes through the round-22 ClientSetBehindView sender in PlayerTick
-    // (fires the moment the remote controller ticks with a pawn). The client's
-    // bBehindView stays false until that RPC lands.
+    // deliberately NOT seeded here: view activation on remote clients is owned
+    // by the ClientRestart override (round 24) and the PlayerTick
+    // ClientSetBehindView sender (round 22), both of which run once the
+    // controller ticks with a pawn. Seeding it here would run before the pawn
+    // exists and fight those two.
     if ( Role != ROLE_Authority )
     {
         t_shoulderSign  = 1;
@@ -250,12 +280,107 @@ function TP_DoBind( string KeyName, string Command )
     ConsoleCommand( "set Input" @ KeyName @ Command );
 }
 
+// ---------------------------------------------------------------------------
+// scope / guided-mode view management
+// ---------------------------------------------------------------------------
+
+function StartZoomWithMax(float MaxZoomLevel)
+{
+    if ( !t_scopeActive )
+    {
+        t_scopeActive = true;
+        t_scopeWasBehind = bBehindView;
+        t_scopeWasFpLock = t_fpLock;
+        bBehindView = false;
+        if ( tp_debug )
+            Log( "GTA-TP: scope started, forcing first person (wasBehind="$t_scopeWasBehind$")" );
+    }
+    Super.StartZoomWithMax(MaxZoomLevel);
+}
+
+function EndZoom()
+{
+    Super.EndZoom();
+
+    if ( t_scopeActive )
+    {
+        t_scopeActive = false;
+        bBehindView = t_scopeWasBehind;
+        t_fpLock = t_scopeWasFpLock;
+        if ( tp_debug )
+            Log( "GTA-TP: scope ended, restored view (behind="$bBehindView$")" );
+    }
+}
+
 function Possess( Pawn aPawn )
 {
+    local bool bIsWarhead;
+    local bool bEndedGuide;
+
+    // Redeemer guided mode: the weapon unpossesses the pawn and possesses a
+    // RedeemerWarhead, then on impact RelinquishController repossesses the old
+    // pawn. UnPossess does not change bBehindView, so at this point it still
+    // holds the player's pre-guidance value — remember it and restore it when
+    // we get the pawn back, so guiding never leaves you stuck in the wrong view.
+    bIsWarhead = ( aPawn != None ) && aPawn.IsA('RedeemerWarhead');
+
+    if ( bIsWarhead && !t_guideActive )
+    {
+        t_guideActive    = true;
+        t_guideWasBehind = bBehindView;
+        t_guideWasFpLock = t_fpLock;
+    }
+    else if ( t_guideActive && !bIsWarhead )
+        bEndedGuide = true;
+
     Super.Possess( aPawn );
 
-    // start in third person when the mod is enabled
-    bBehindView       = tp_enable;
+    if ( bIsWarhead )
+    {
+        // Camera follows the missile; force first person. Stock RedeemerWarhead
+        // PointOfView() is false, but set it explicitly so this does not depend
+        // on the pawn class.
+        bBehindView = false;
+        t_fpLock    = false;
+        if ( tp_debug )
+            Log( "GTA-TP: guidance started, forcing first person" );
+    }
+    else if ( bEndedGuide )
+    {
+        // Guidance ended: back on the player pawn, restore the remembered view.
+        t_guideActive = false;
+        bBehindView   = t_guideWasBehind;
+        t_fpLock      = t_guideWasFpLock;
+        // bBehindView is not replicated, so a remote client would otherwise stay
+        // in the first person Super.Possess (Restart -> BehindView) just pushed.
+        // Viewport(Player) == None is the stock "not a local player on this
+        // machine" test: on the server a remote player's controller has Player
+        // set but no Viewport, while the host's own controller owns one. (The
+        // old Player==None test never matched a remote controller, so this RPC
+        // never went out — round 24 fix.)
+        if ( Role == ROLE_Authority && (Viewport(Player) == None)
+             && Level.NetMode != NM_Standalone )
+            ClientSetBehindView( bBehindView );
+        if ( tp_debug )
+            Log( "GTA-TP: guidance ended, restored view (behind="$bBehindView$")" );
+    }
+    else
+    {
+        // Normal possession (spawn/restart). The first possession of a session
+        // starts in third person when the mod is enabled; after that we keep
+        // the view the player last chose, so a first-person player does not get
+        // yanked back to third person on every respawn (and vice versa).
+        if ( t_viewPrefSet )
+            bBehindView = t_viewPrefBehind;
+        else
+        {
+            bBehindView      = tp_enable;
+            t_viewPrefSet    = true;
+            t_viewPrefBehind = bBehindView;
+        }
+        t_fpLock = false;
+    }
+
     t_shoulderSign    = 1;
     t_camDist         = tp_dist;
     t_camShoulder     = tp_shoulder;
@@ -265,20 +390,19 @@ function Possess( Pawn aPawn )
     t_bodyYaw         = Rotation.Yaw;
     t_bodyTargetYaw   = Rotation.Yaw;
     t_bodyTargetValid = false;
-    t_fpLock          = false;
     t_camLogged       = false;
     t_unlockLogged    = false;
     t_aimValid        = false;
 
     // bBehindView is not a replicated var, so remote clients only ever receive a
-    // behind-view change through the stock ClientSetBehindView RPC. The direct
-    // assignment above covers the local host / standalone. For (remote) clients
-    // the one-shot flag is armed here and the RPC goes out from PlayerTick as
-    // soon as the remote ready conditions hold — round 22 removed the old
-    // 3-second deferral, which was founded on a wrong diagnosis (the freeze
-    // was the missing host ServerPackages line, see round 21 in CONTEXT.md).
-    // ClientSetBehindView itself never demonstrably caused any problem, and
-    // the deferral just made joining clients stare at first person for 3 s.
+    // behind-view change through the stock ClientSetBehindView RPC (or apply it
+    // locally in the ClientRestart override above). The direct assignment covers
+    // the local host / standalone. For (remote) clients the one-shot flag is
+    // armed here and the RPC goes out from PlayerTick as soon as the remote
+    // ready conditions hold — round 22 removed the old 3-second deferral, which
+    // was founded on a wrong diagnosis (the freeze was the missing host
+    // ServerPackages line, see round 21 in CONTEXT.md). Round 24 fixed the gate
+    // that kept this RPC from ever being sent to a remote controller.
     t_behindViewSent = false;
 
     if ( tp_debug )
@@ -287,8 +411,108 @@ function Possess( Pawn aPawn )
              $" netmode="$Level.NetMode );
 }
 
+// ---------------------------------------------------------------------------
+// remembered view (survives respawns, and the server learns the client's pick)
+// ---------------------------------------------------------------------------
+
+// Stock Restart()/ClientRestart() reset the view to Pawn.PointOfView() — first
+// person for a normal pawn — on every spawn and every respawn. That wiped the
+// player's choice before the remote ClientSetBehindView activation RPC could
+// even arrive. Re-apply the remembered preference here. This runs on the
+// server copy (called from Restart) and on the owning client's copy (the
+// reliable RPC), which is what makes the choice stick for remote players too.
+function ClientRestart( Pawn NewPawn )
+{
+    Super.ClientRestart( NewPawn );
+
+    // Redeemer guidance: stock sets first person for the warhead
+    // (PointOfView() is false) and Possess forces it explicitly; do not
+    // override that with the player's normal-view preference.
+    if ( (NewPawn == None) || NewPawn.IsA('RedeemerWarhead') )
+        return;
+
+    // Vehicles keep the stock chase camera decision (Vehicle.PointOfView()).
+    if ( !tp_enable || (Vehicle(NewPawn) != None) )
+        return;
+
+    if ( t_viewPrefSet )
+        bBehindView = t_viewPrefBehind;
+    else
+    {
+        // First possession of the session: third person when enabled. On a
+        // remote client this may run before the server's pref vars replicate,
+        // in which case the default is exactly what we want anyway.
+        bBehindView      = true;
+        t_viewPrefSet    = true;
+        t_viewPrefBehind = true;
+    }
+
+    if ( tp_debug )
+        Log( "GTA-TP: restart view applied (behind="$bBehindView$")" );
+}
+
+// Remote clients own their local bBehindView (PlayerCalcView runs there), but
+// the server needs the same choice: it decides the view on respawn, drives the
+// server-side bFreeCamera pawn facing, and is the only side that can send
+// ClientSetBehindView. TP_Toggle used to be a purely local exec, so the server
+// never learned about it (round 24 fix).
+function ServerTPViewPref( bool bBehind )
+{
+    t_viewPrefSet    = true;
+    t_viewPrefBehind = bBehind;
+    bBehindView      = bBehind;
+    if ( tp_debug )
+        Log( "GTA-TP: server got view preference (behind="$bBehind$")" );
+}
+
 simulated event PlayerTick( float DeltaTime )
 {
+    local bool bViewEligible;
+
+    // ---- round-25: local view re-assertion on every pawn change ------------
+    // The remote client never runs Possess(), so it has no server-side hook
+    // where "new pawn => apply the remembered view" can happen locally.
+    // ClientRestart is a network event and stock sends ClientSetBehindView(false)
+    // from it; whichever packet lands last used to win. So the client watches
+    // its own Pawn instead: any new pawn (spawn, respawn, or the pawn swap when
+    // Redeemer guidance ends) re-asserts the remembered view for a short window.
+    // This needs no RPC and runs identically on the host (where Possess already
+    // did the same thing, so it is a no-op).
+    bViewEligible = tp_enable && (Pawn != None) && (Pawn.Health > 0)
+                    && !Pawn.IsA('RedeemerWarhead') && (Vehicle(Pawn) == None)
+                    && !IsSpectating();
+
+    if ( Pawn != t_viewPawn )
+    {
+        t_viewPawn      = Pawn;
+        t_viewPawnArmed = false;
+    }
+
+    // Arming is retried until the pawn is actually eligible (a freshly
+    // replicated pawn can still report Health 0 for a tick), so a transient
+    // miss does not leave the spawn in stock first person.
+    if ( !t_viewPawnArmed && bViewEligible )
+    {
+        t_viewPawnArmed     = true;
+        t_viewReassertUntil = Level.TimeSeconds + 2.0;
+        if ( !t_viewPrefSet )
+        {
+            t_viewPrefSet    = true;
+            t_viewPrefBehind = tp_enable;
+        }
+        Log( "GTA-TP: pawn change, view re-asserted (behind="$t_viewPrefBehind
+             $" role="$Role$" netmode="$Level.NetMode$")" );
+    }
+
+    // Inside the window, keep the remembered view applied. Skipped while the
+    // view is legitimately overridden: auto first person, a scope, the
+    // Redeemer missile, vehicles, death and spectating. A manual TP_Toggle
+    // updates the preference, so it is not fought.
+    if ( (Level.TimeSeconds < t_viewReassertUntil)
+         && bViewEligible && !t_fpLock && !t_scopeActive
+         && (bBehindView != t_viewPrefBehind) )
+        bBehindView = t_viewPrefBehind;
+
     // Manage the stock bFreeCamera flag here, every tick (UpdateRotation runs
     // later, inside Super.PlayerTick). On foot, TRUE makes stock UpdateRotation
     // skip Pawn.FaceRotation(camera) (Engine/PlayerController.uc ~4406), so the
@@ -311,13 +535,16 @@ simulated event PlayerTick( float DeltaTime )
     // Round 22: the 3-second deferral was removed — founded on a wrong
     // diagnosis (round 21: the freeze was the missing host ServerPackages line;
     // frozen clients never received any RPC). Waiting is pure latency now.
-    // Round 20: (Player == None) restricts this to REMOTE clients' server
-    // copies. The local host's own controller on a listen server has Player
-    // set (it owns the viewport) and must not send the RPC to itself.
-    // Remote copies never have Player set.
+    // Round 24: use the stock remote-controller test. On the server a remote
+    // player's controller HAS Player set (the net connection) but owns no
+    // Viewport; the host's own controller owns one. The old (Player == None)
+    // gate therefore never matched a remote controller and this activation
+    // never fired — joining clients stayed in stock first person until they
+    // pressed TP_Toggle. Viewport(Player) == None is the same test stock uses
+    // in xPlayer.PlayerTick and AcknowledgePossession.
     if ( !t_behindViewSent
          && Role == ROLE_Authority
-         && (Player == None)
+         && (Viewport(Player) == None)
          && tp_enable && (Level.NetMode != NM_Standalone)
          && (Vehicle(Pawn) == None) && bBehindView && (ViewTarget == Pawn) )
     {
@@ -716,8 +943,13 @@ event PlayerCalcView( out actor ViewActor, out vector CameraLocation, out rotato
     local int  RouteHP;
     local bool RouteVtg, RouteScv, RouteVeh, RouteSpec;
 
+    // NOTE: deliberately no !Pawn.bSpecialCalcView check here. This mutator is
+    // the dedicated camera and takes priority over any pawn-provided special
+    // camera (e.g. Kakutou2k4's martial-arts camera). Pawns that used to rely
+    // on SpecialCalcView simply get the GTA camera while it is enabled; with
+    // tp_enable off (or in a vehicle/spectating) they still get the stock path.
     bGTA = tp_enable && (ViewTarget == Pawn) && (Pawn != None)
-           && !Pawn.bSpecialCalcView && (Vehicle(Pawn) == None)
+           && (Vehicle(Pawn) == None)
            && !IsSpectating() && (Pawn.Health > 0);
 
     // bBehindView OR t_fpLock: while the auto first person lock is engaged we
@@ -789,23 +1021,44 @@ event PlayerCalcView( out actor ViewActor, out vector CameraLocation, out rotato
 
 function TP_CalcCam( out vector CamLoc, out rotator CamRot )
 {
-    local vector Anchor, Dir, RightVec, HitLoc, HitNormal;
+    local vector Anchor, Dir, RightVec, HitLoc, HitNormal, X, Y, Z;
     local float  FreeDist, dt;
-    local rotator YawOnly;
+    local vector AmbShakeOffset;
+    local rotator AmbShakeRot;
+    local float FalloffScaling;
 
     dt = FMin( Level.TimeSeconds - t_lastCamCalc, 0.5 );
     if ( dt < 0.0 ) dt = 0.0;
     t_lastCamCalc = Level.TimeSeconds;
 
-    CamRot = Rotation;      // mouse controls the camera directly, like the stock FPS aim
+    // Apply view shake and ambient shake, mirroring CalcFirstPersonView.
+    // Weapons (AR, Minigun) and explosions use these to shake the screen.
+    if ( bEnableAmbientShake )
+    {
+        if ( AmbientShakeFalloffStartTime > 0 && Level.TimeSeconds - AmbientShakeFalloffStartTime > AmbientShakeFalloffTime )
+            bEnableAmbientShake = false;
+        else
+        {
+            if ( AmbientShakeFalloffStartTime > 0 )
+            {
+                FalloffScaling = 1.0 - ((Level.TimeSeconds - AmbientShakeFalloffStartTime) / AmbientShakeFalloffTime);
+                FalloffScaling = FClamp(FalloffScaling, 0.0, 1.0);
+            }
+            else
+                FalloffScaling = 1.0;
+
+            AmbShakeOffset = AmbientShakeOffsetMag * FalloffScaling * sin(Level.TimeSeconds * AmbientShakeOffsetFreq * 2.0 * Pi);
+            AmbShakeRot = AmbientShakeRotMag * FalloffScaling * sin(Level.TimeSeconds * AmbientShakeRotFreq * 2.0 * Pi);
+        }
+    }
+
+    CamRot = Normalize(Rotation + ShakeRot + AmbShakeRot);
 
     TP_SetCamParams( dt );
 
     Dir = vector(CamRot);
-    YawOnly.Pitch = 0;
-    YawOnly.Yaw   = CamRot.Yaw;
-    YawOnly.Roll  = 0;
-    RightVec = vect(0,1,0) >> YawOnly;
+    GetAxes(CamRot, X, Y, Z);
+    RightVec = Y;
 
     Anchor = Pawn.Location + Pawn.EyePosition();
     Anchor.Z += t_camHeight;
@@ -853,7 +1106,11 @@ function TP_CalcCam( out vector CamLoc, out rotator CamRot )
              $" syncReady="$t_syncReady );
     }
 
-    CamLoc = Anchor - FreeDist * Dir;
+    CamLoc = Anchor - FreeDist * Dir
+             + ShakeOffset.X * X
+             + ShakeOffset.Y * Y
+             + ShakeOffset.Z * Z
+             + AmbShakeOffset;
 
     // convergence ray for the reticle & AdjustAim. The camera sits on the
     // view line (the pull-in moves along the view direction), so tracing from
@@ -1167,7 +1424,18 @@ function rotator AdjustAim( FireProperties FiredAmmunition, vector projStart, in
 exec function TP_Toggle()       // 1st <-> 3rd person
 {
     if ( tp_enable )
+    {
         bBehindView = !bBehindView;
+
+        // Remember the choice: it now survives respawns, and the server needs
+        // it for the respawn decision + bFreeCamera. On a remote client the
+        // exec only runs on the client copy, so send it across; the local
+        // value is updated too so the camera switches immediately.
+        t_viewPrefSet    = true;
+        t_viewPrefBehind = bBehindView;
+        if ( Role < ROLE_Authority )
+            ServerTPViewPref( bBehindView );
+    }
     if ( !bBehindView )
         t_fpLock = false;
 }

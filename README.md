@@ -27,6 +27,17 @@ body turns cosmetically towards the movement direction.
 - **Crouch auto-adjust**: tighter camera values while crouching.
 - **Aim mode** (`tpaim`-style): tighter camera and body locked to the crosshair;
   the body also locks to the crosshair while firing (`tp_fire_lock`).
+- **Scopes and guided missiles force first person**: using a scope (sniper rifle
+  and anything else that zooms) or guiding a Redeemer warhead temporarily
+  switches to first person, then puts you back in the view you had (third or
+  first person) when the scope/guidance ends.
+- **Weapon shake reaches the third-person camera**: firing the Assault Rifle,
+  spinning up the Minigun, damage shake and ambient shake all kick the
+  third-person view just like the stock first-person camera.
+- **Remembers your view across respawns (host and clients)**: the first spawn
+  of a session starts in third person when the mutator is enabled, and after
+  that your first/third person choice carries over every respawn instead of
+  being reset by the stock camera.
 - Works as a **mutator on any gametype** (DM, CTF, DOM, Assault...). Bots are
   untouched. No pawn replacement, no weapon replacement.
 - All values configurable — in-game via the Mutators tab **[Configure Mutations]**
@@ -248,6 +259,9 @@ tested/verified behaviour and known limits:
 - The third-person view is pushed to joining clients with the stock
   `ClientSetBehindView` replication path, so remote players get the orbit
   camera, keybinds and their **own local tuning** (each client's ini applies).
+  A remote client's view choice is sent to the server (`ServerTPViewPref`), so
+  respawns keep the same first/third person state and the server-side body
+  facing stays in sync.
 - **Aim accuracy:** remote clients stream their crosshair convergence point
   to the server (one small unreliable vector per frame while in third
   person), so their shots converge on the crosshair just like the host's. If

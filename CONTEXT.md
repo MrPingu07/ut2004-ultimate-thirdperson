@@ -960,3 +960,176 @@ ticks, instead of 3 s after join. Watch for:
   host player (round 20 guard),
 - no freeze (ServerPackages line must still exist on the host — the mod now
   self-registers it in round 21+, but verify once).
+
+### 2026-10-29 — round 23: scopes and Redeemer guidance force first person; third-person weapon shake
+
+Two gaps left by the "third person is the normal view" model:
+
+1. Scoped fire and Redeemer guidance are camera-critical. In third person the
+   sniper scope is unusable (the scope overlay does not match the over-shoulder
+   ray) and the guided Redeemer puts the camera behind the missile instead of
+   in its nose. Both now force first person for their duration, remember the
+   view the player was using, and restore it on exit.
+2. First-person weapon shake (Assault Rifle, Minigun spin-up, damage shake)
+   never reached the third-person camera because stock only applies
+   ShakeRot/ShakeOffset inside CalcFirstPersonView.
+
+Changes (GTAPlayerController):
+- New transient memory vars: t_scopeActive / t_scopeWasBehind / t_scopeWasFpLock
+  and t_guideActive / t_guideWasBehind / t_guideWasFpLock.
+- StartZoomWithMax() override: on the first call of a zoom episode, save
+  bBehindView + t_fpLock, set bBehindView=false, then Super. EndZoom() override:
+  Super first, then restore the saved view. Rationale: SniperRifle's scope-on
+  path calls ToggleZoom -> StartZoomWithMax (and StartZoom when already ramped),
+  scope-off calls StopZoom (ramp halt only) or EndZoom (full exit), so hooking
+  StartZoomWithMax/EndZoom is the pair that brackets the whole scoped episode;
+  the t_scopeActive guard makes repeated StartZoomWithMax/StartZoom calls
+  idempotent without re-saving an already-forced value.
+- Possess() rewritten around `aPawn.IsA('RedeemerWarhead')` (stock idiom):
+  * warhead possessed and no guide active: remember bBehindView + t_fpLock
+    BEFORE Super, then force first person after it;
+  * a non-warhead possessed while a guide is active: we are back on the player
+    pawn (RedeemerWarhead.RelinquishController repossesses the old pawn; stock
+    UnPossess does not touch bBehindView, so the pre-guidance value survives),
+    restore the saved view;
+  * anything else is a normal spawn/restart: tp_enable / t_fpLock=false as
+    before. Removed the old t_guideOldPawn/GetPropertyText hack.
+  * bBehindView is not replicated, so on a remote player's server copy
+    (Role==AUTH && Player==None && !Standalone) the restore also sends
+    ClientSetBehindView(bBehindView), otherwise the remote client would stay
+    in the first person that Super.Possess -> Restart -> BehindView installed.
+- TP_CalcCam(): after the normal camera placement, add ShakeRot to the camera
+  rotation and ShakeOffset to CamLoc along the (post-shake) camera axes, plus
+  the ambient-shake rot/offset when bEnableAmbientShake, mirroring
+  CalcFirstPersonView. ViewShake() runs every tick via Super.UpdateRotation, so
+  those vars are current by the time PlayerCalcView runs. The shake is applied
+  after the wall trace, so it deliberately does not pull the camera out of
+  walls (stock does not trace shake either).
+- Removed unused locals left over from the draft (YawOnly, UpVec) to keep the
+  build at 0 warnings.
+- TP_MODVERSION 22 -> 23.
+
+Rebuilt: 0 errors / 0 warnings. Round-23 package md5
+5a71726d7314ce1f35072e13d30daa58. Headless server load of
+DM-Antalus + the mutator is clean (only the usual unrelated Infestation map
+and DNS noise).
+
+Test plan for the user:
+- Third person + sniper zoom in/out: view must snap to first person on scope-in
+  and return to the exact previous view (third or first) on scope-out, with
+  "package version 23" in the log.
+- Third person + Redeemer guided missile: first person while flying, back to
+  the previous view after the warhead detonates; on a remote client too
+  (ClientSetBehindView restore).
+- Fire the AR / spin the Minigun in third person: the camera should now kick
+  like the first-person view does.
+
+### 2026-10-30 — round 24: clients never got the forced third person on spawn; view now survives respawns
+
+Two reports from playtesting:
+
+1. Clients did not start in third person even with the mutator enabled; they
+   had to press TP_Toggle after joining.
+2. The chosen view was not remembered across respawns: the host always came
+   back in third person (the default), clients in first person.
+
+Root cause of (1): a wrong "remote controller" test. The remote activation
+sender was gated on `Player == None`, on the belief that only the local host's
+controller has a Player. In UE2/UT2004 a remote player's SERVER-side
+controller HAS Player set (the net connection object); what it does not have
+is a Viewport. Stock distinguishes local from remote with
+`Viewport(Player) != None` (Engine/PlayerController.AcknowledgePossession,
+XGame/xPlayer.PlayerTick). So the gate never matched a remote controller and
+`ClientSetBehindView(true)` was never sent — clients stayed in the stock first
+person that ClientRestart installs. The round-23 Redeemer restore RPC had the
+same gate and the same dead path.
+
+Root cause of (2): both `PlayerController.Restart()` and `ClientRestart()`
+apply `bBehindView = Pawn.PointOfView()` (false for normal pawns) on every
+spawn, and Possess then unconditionally used `tp_enable`, so the previous
+choice was lost. TP_Toggle was also a purely local exec: the server's copy of
+bBehindView never learned about a remote player's toggle.
+
+Changes (GTAPlayerController):
+- Remote-controller gates in the PlayerTick activation sender and in the
+  Redeemer guidance-end restore now use `Viewport(Player) == None`, with
+  comments citing the stock idiom.
+- New replicated view preference: t_viewPrefSet / t_viewPrefBehind
+  (authority -> client) plus a client -> server reliable `ServerTPViewPref`
+  that also sets the server's bBehindView (so bFreeCamera / server-side pawn
+  facing follow the client's choice).
+- TP_Toggle records the new state in the preference and, on a remote client,
+  sends it to the server.
+- Possess normal branch: first possession of a session = tp_enable (third
+  person); afterwards restore t_viewPrefBehind.
+- New ClientRestart() override: after Super (which just installed
+  Pawn.PointOfView), re-apply the remembered preference, or default to true on
+  the first possession of a session. Runs on the server copy via Restart and
+  on the owning client copy via the reliable RPC, which is what makes the
+  choice stick on both ends. Skips RedeemerWarhead (round-23 guidance must
+  stay first person) and vehicles (keep stock chase-camera decision).
+- Removed the unused/incorrect comment claiming remote copies have no Player.
+- TP_MODVERSION 23 -> 24.
+
+Rebuilt: 0 errors / 0 warnings. Round-24 package md5
+00bd3582e44a5b5bcceb1c3a8523aa72. Headless server load clean.
+
+Test plan for the user:
+- Client joins a match with the mutator: must spawn in third person with no
+  key press ("package version 24" on both ends).
+- Toggle to first person, die, respawn: stays first person. Toggle back, die,
+  respawn: stays third person. Same on the host.
+- Toggle on a remote client and watch your body facing on the host's screen:
+  it should match stock first person when you are in first person.
+- Redeemer guide from third person as a remote client: first person in the
+  missile, back to third person after detonation.
+
+### 2026-10-30 — round 25: client view fixed locally on every pawn change (no RPC dependency)
+
+Round 24 fixed the host but the remote client still spawned/respawned in first
+person and still stayed first person after Redeemer guidance. The client-side
+pieces of round 24 all depended on either the server's ClientSetBehindView
+RPC or the replicated preference arriving in the right order relative to
+stock's own ClientRestart -> BehindView(false) call. Whichever packet landed
+last won, and on the client that was stock's false.
+
+Rather than keep chasing RPC ordering, the client now observes its own Pawn.
+PlayerTick on the local copy takes exactly the same path as every other
+client-side feature (input, PlayerCalcView, TP_Toggle), so it cannot be
+starved by replication:
+
+- New transient t_viewPawn + t_viewReassertUntil.
+- When Pawn changes (spawn, respawn, or the warhead -> player pawn swap at the
+  end of Redeemer guidance), the controller starts a 2-second re-assertion
+  window and applies the remembered view. During the window it keeps
+  re-applying bBehindView = t_viewPrefBehind unless the view is legitimately
+  overridden: auto first person (t_fpLock), a scope (t_scopeActive), the
+  Redeemer missile (Pawn is a RedeemerWarhead), a vehicle, death
+  (Pawn.Health <= 0) or spectating.
+- A manual TP_Toggle updates the preference, so the window does not fight it.
+- The same code runs on the host, where Possess already applied the view, so
+  it is a no-op there.
+- The view preference vars are NO LONGER replicated (round-24 replication
+  removed). Each machine owns its copy: the server's from Possess +
+  ServerTPViewPref, the client's from its own TP_Toggle and this local
+  re-assertion. Server -> client replication could overwrite a fresh client
+  choice with a stale value at exactly the wrong moment (the likely reason
+  round 24 still failed on the client).
+- ClientRestart override kept as the immediate path; the pawn-change
+  re-assertion is the safety net that survives late stock RPCs.
+- TP_MODVERSION 24 -> 25.
+
+Rebuilt: 0 errors / 0 warnings. Round-25 package md5
+91c663c660a3c5e540cbb212827aff5d. Headless server load clean.
+
+Also note for testers: the client must actually have the round-25 .u. The
+round-24 symptoms are exactly what a round-23 client would show, so check
+`grep "package version" UT2004.log` on the client before judging the fix —
+it must print 25.
+
+Test plan for the user:
+- Client joins / respawns: third person, no key press.
+- Client toggles first person, dies, respawns: still first person.
+- Client guides a Redeemer launched from third person: back to third person
+  after the warhead detonates (and first person if launched from first person).
+- Host behaviour unchanged.
