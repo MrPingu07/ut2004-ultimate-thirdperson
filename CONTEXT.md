@@ -1133,3 +1133,27 @@ Test plan for the user:
 - Client guides a Redeemer launched from third person: back to third person
   after the warhead detonates (and first person if launched from first person).
 - Host behaviour unchanged.
+
+### 2026-11-01 — round 26: own weapon switch animation on remote clients
+
+Roadmap item: as a client, the weapon switch animation on your own pawn did not
+display (it worked when hosting). Stock xPawn.PlayWeaponSwitch — which plays the
+third-person Weapon_Switch animation on the pawn — is only called from
+Pawn.ServerChangedWeapon, and that path runs on the server. When the owning
+client predicts a switch, Pawn.ChangedWeapon takes the Role < ROLE_Authority
+branch, updates Weapon and calls Controller.ChangedWeapon(), but never calls
+PlayWeaponSwitch. Other players see it through the replicated AnimAction; the
+owner does not get it applied locally.
+
+Fix: GTAPlayerController overrides ChangedWeapon(), calls Super, and on a
+non-authoritative locally controlled pawn replays Pawn.PlayWeaponSwitch(Weapon).
+Role gate keeps the host/standalone path untouched (stock already plays it
+there, so no double call). Covers manual switches, weapon pickups and
+server-selected switches, because all of them route through ChangedWeapon().
+
+TP_MODVERSION 25 -> 26. Rebuilt: 0 errors / 0 warnings. Headless
+`ucc server` load clean (mutator listed, no criticals).
+
+Test plan: join a listen/dedicated server as a client, stay in third person and
+switch weapons with the number keys / mouse wheel. The pawn should lower/raise
+with the Weapon_Switch animation, matching the host's own view.

@@ -170,7 +170,7 @@ const TP_CFGVERSION = 4;
 // across them can hang the client at actor-channel load with NO error string.
 // A one-line `grep "package version"` in both logs proves parity or condemns
 // the stale install. Bump this together with every behavior-affecting round.
-const TP_MODVERSION = 25;
+const TP_MODVERSION = 26;
 
 simulated event PostBeginPlay()
 {
@@ -409,6 +409,27 @@ function Possess( Pawn aPawn )
         Log( "GTA-TP: Possess pawn="$aPawn$" controller="$Class
              $" behind="$bBehindView$" enable="$tp_enable
              $" netmode="$Level.NetMode );
+}
+
+// ---------------------------------------------------------------------------
+// weapon switch animation on the owning client
+// ---------------------------------------------------------------------------
+
+// Stock xPawn.PlayWeaponSwitch (the third person Weapon_Switch animation on the
+// pawn itself) is only called from Pawn.ServerChangedWeapon, which runs on the
+// server. When the local client predicts a switch, Pawn.ChangedWeapon takes the
+// Role < ROLE_Authority branch: it updates the weapon and calls
+// Controller.ChangedWeapon(), but never PlayWeaponSwitch. Remote players get the
+// animation through the replicated AnimAction; the owner does not (which is why
+// you only saw your own switch animation when hosting). Replay it here on the
+// owning client, right where stock switches the weapon locally.
+function ChangedWeapon()
+{
+    Super.ChangedWeapon();
+
+    if ( tp_enable && (Role < ROLE_Authority) && (Pawn != None)
+         && (Pawn.Weapon != None) && Pawn.IsLocallyControlled() )
+        Pawn.PlayWeaponSwitch( Pawn.Weapon );
 }
 
 // ---------------------------------------------------------------------------
