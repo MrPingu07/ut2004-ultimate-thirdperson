@@ -54,14 +54,13 @@ body turns cosmetically towards the movement direction.
 On first run the mod applies these itself using the stock UT2004 mechanism
 (`set Input <key> <command>` — UT2004 has **no** `bind` console command). With
 `tp_autobind=True` (default) it **overwrites** whatever `Z`, `X` and `Alt` were
-bound to (this install: `Z=Strafe` legacy key and `X=ShowVoteMenu`); set
-`tp_autobind=False` to only bind keys that are free. Restore at any time from
-**Settings > Controls** or the console:
+bound to (your existing binds); set `tp_autobind=False` to only bind keys that
+are free. Restore at any time from **Settings > Controls** or the console:
 
 ```
 set Input Z TP_Toggle          ; re-apply
-set Input Z Strafe             ; restore the old bind
-set Input X ShowVoteMenu
+set Input Z <old bind>         ; restore your old bind (example: Z=Strafe)
+set Input X <old bind>         ; restore your old bind (example: X=ShowVoteMenu)
 ```
 
 If binds ever stop working, run the console command `TP_SetDefaultBinds`.
@@ -112,14 +111,13 @@ commands). Deliberately not on that page — console/ini only:
 On first run the mod applies these itself using the stock UT2004 mechanism
 (`set Input <key> <command>` — UT2004 has **no** `bind` console command). With
 `tp_autobind=True` (default) it **overwrites** whatever `Z`, `X` and `Alt` were
-bound to (this install: `Z=Strafe` legacy key and `X=ShowVoteMenu`); set
-`tp_autobind=False` to only bind keys that are free. Restore at any time from
-**Settings > Controls** or the console:
+bound to (your existing binds); set `tp_autobind=False` to only bind keys that
+are free. Restore at any time from **Settings > Controls** or the console:
 
 ```
 set Input Z TP_Toggle          ; re-apply
-set Input Z Strafe             ; restore the old bind
-set Input X ShowVoteMenu
+set Input Z <old bind>         ; restore your old bind (example: Z=Strafe)
+set Input X <old bind>         ; restore your old bind (example: X=ShowVoteMenu)
 ```
 
 If binds ever stop working, run the console command `TP_SetDefaultBinds`.

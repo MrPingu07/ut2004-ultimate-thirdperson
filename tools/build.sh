@@ -6,6 +6,8 @@ set -euo pipefail
 GAME_DIR="${UT2004_DIR:-$HOME/Juegos/UT2004}"
 SYS="$GAME_DIR/System"
 PKG="GTAThirdPerson"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 if [ ! -f "$SYS/UCC.exe" ]; then
     echo "UCC.exe not found in $SYS — set UT2004_DIR" >&2
@@ -35,3 +37,22 @@ fi
 rm -f "$SYS/$PKG.u"
 cd "$SYS"
 WINEDEBUG=-all DISPLAY= wine UCC.exe make
+
+# --- refresh tracked release artifacts ---------------------------------------
+# The release workflow cannot run ucc (it needs the retail game files), so the
+# compiled package is kept in prebuilt/ and packaged from there. Commit it
+# whenever the source changes; tools/package.sh refuses to package stale ones.
+mkdir -p "$ROOT/prebuilt/System"
+cp -f "$SYS/$PKG.u" "$ROOT/prebuilt/System/$PKG.u"
+cp -f "$ROOT/$PKG/$PKG.int" "$ROOT/prebuilt/System/$PKG.int"
+if [ -f "$ROOT/$PKG/$PKG.ucl" ]; then
+    cp -f "$ROOT/$PKG/$PKG.ucl" "$ROOT/prebuilt/System/$PKG.ucl"
+fi
+SRC_HASH="$("$ROOT/tools/source-hash.sh")"
+GIT_COMMIT="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
+{
+    echo "source-sha256=$SRC_HASH"
+    echo "commit=$GIT_COMMIT"
+    echo "built=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+} > "$ROOT/prebuilt/BUILD"
+echo "== release artifacts refreshed in $ROOT/prebuilt"

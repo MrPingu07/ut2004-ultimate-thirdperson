@@ -1,33 +1,77 @@
 #!/usr/bin/env bash
-# Builds the release artifact: a single zip that users extract into their
-# UT2004 directory — the files land in System/ and the mutator is ready.
-# Usage: tools/package.sh [version]   (after tools/build.sh + tools/install.sh)
+#
+# tools/package.sh - build the release zip from the tracked prebuilt package.
+#
+# The zip is a normal UT2004 mutator drop-in:
+#
+#   System/GTAThirdPerson.u    compiled mod package
+#   System/GTAThirdPerson.int  mutator metadata (name/description)
+#   System/GTAThirdPerson.ucl  cache record for the mutator list
+#   INSTALL.txt                install + network-play notes
+#
+# Extract it into the UT2004 installation folder (the one containing System/).
+# No build tools, source or install scripts are shipped.
+#
+# The binary comes from prebuilt/, which tools/build.sh refreshes. This script
+# refuses to package when prebuilt/ is older than the source classes, so a
+# release can never silently ship a stale .u.
+#
+# Usage: tools/package.sh [version] [--allow-stale]
+#   version defaults to `git describe --tags` (leading "v" removed).
+#
 set -euo pipefail
 
-VERSION="${1:-1.0}"
-NAME="ut2004-ultimate-thirdperson"
-PKG="GTAThirdPerson"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-OUT="$ROOT/dist"
-STAGE="$OUT/$NAME-v$VERSION"
+PKG="GTAThirdPerson"
+VERSION=""
+ALLOW_STALE=0
 
-GAME_DIR="${UT2004_DIR:-$HOME/Juegos/UT2004}"
-SYS="$GAME_DIR/System"
-
-for f in "$PKG.u" "$PKG.int" "$PKG.ucl"; do
-    if [ ! -f "$SYS/$f" ]; then
-        echo "ERROR: $SYS/$f is missing — run tools/build.sh && tools/install.sh first." >&2
-        exit 1
-    fi
+for arg in "$@"; do
+    case "$arg" in
+        --allow-stale) ALLOW_STALE=1 ;;
+        *) VERSION="$arg" ;;
+    esac
 done
 
-rm -rf "$STAGE"
-mkdir -p "$STAGE/System"
+if [ -z "$VERSION" ]; then
+    VERSION="$(git -C "$ROOT" describe --tags 2>/dev/null || echo 0.0.0)"
+fi
+VERSION="${VERSION#v}"
 
-# the three install files, plus a readable INSTALL note at the zip root
-install -m 0644 "$SYS/$PKG.u"   "$STAGE/System/"
-install -m 0644 "$SYS/$PKG.int" "$STAGE/System/"
-install -m 0644 "$SYS/$PKG.ucl" "$STAGE/System/"
+PREBUILT="$ROOT/prebuilt"
+OUTDIR="$ROOT/dist"
+OUT="$OUTDIR/$PKG-$VERSION.zip"
+
+for f in "$PREBUILT/System/$PKG.u" "$PREBUILT/System/$PKG.ucl" "$PREBUILT/System/$PKG.int"; do
+    [ -f "$f" ] || { echo "ERROR: missing release artifact: $f" >&2; exit 1; }
+done
+
+# --- staleness check ---------------------------------------------------------
+SRC_HASH="$(tools/source-hash.sh)"
+BUILT_HASH="$(sed -n 's/^source-sha256=//p' "$PREBUILT/BUILD" 2>/dev/null || true)"
+if [ "$ALLOW_STALE" -eq 0 ]; then
+    if [ -z "$BUILT_HASH" ]; then
+        echo "ERROR: $PREBUILT/BUILD is missing or has no source-sha256." >&2
+        echo "       Run tools/build.sh (with UT2004 available) and commit prebuilt/." >&2
+        exit 1
+    fi
+    if [ "$SRC_HASH" != "$BUILT_HASH" ]; then
+        echo "ERROR: prebuilt package is stale (source changed since the last build)." >&2
+        echo "       source:   $SRC_HASH" >&2
+        echo "       prebuilt: $BUILT_HASH" >&2
+        echo "       Run tools/build.sh and commit prebuilt/, or pass --allow-stale." >&2
+        exit 1
+    fi
+fi
+
+# --- stage -------------------------------------------------------------------
+STAGE="$(mktemp -d)"
+trap 'rm -rf "$STAGE"' EXIT
+
+mkdir -p "$STAGE/System"
+cp -f "$PREBUILT/System/$PKG.u" "$STAGE/System/"
+cp -f "$PREBUILT/System/$PKG.ucl" "$STAGE/System/"
+cp -f "$PREBUILT/System/$PKG.int" "$STAGE/System/"
 
 cat > "$STAGE/INSTALL.txt" <<EOF
 UT2004 Ultimate ThirdPerson v$VERSION (GPLv3)
@@ -82,17 +126,23 @@ Licensed under the GNU General Public License v3 — this program comes with
 absolutely no warranty.
 EOF
 
-cd "$STAGE"
-rm -f "$OUT/$NAME-$VERSION.zip"
-python3 - "$OUT/$NAME-$VERSION.zip" <<'PYEOF'
+mkdir -p "$OUTDIR"
+rm -f "$OUT"
+python3 - "$STAGE" "$OUT" <<'PY'
 import os, sys, zipfile
-zip_path = sys.argv[1]
-with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
-    for base, dirs, files in os.walk("."):
-        dirs.sort()
-        for f in sorted(files):
-            p = os.path.join(base, f)
-            z.write(p, os.path.relpath(p, "."))
-PYEOF
-echo "Built $OUT/$NAME-$VERSION.zip"
-python3 -c "import sys, zipfile; [print(' ', m) for m in zipfile.ZipFile(sys.argv[1]).namelist()]" "$OUT/$NAME-$VERSION.zip"
+
+stage, out = sys.argv[1], sys.argv[2]
+with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
+    for base, _dirs, files in os.walk(stage):
+        for name in sorted(files):
+            path = os.path.join(base, name)
+            zf.write(path, os.path.relpath(path, stage))
+PY
+
+echo "==> packaged: $OUT"
+python3 - "$OUT" <<'PY'
+import sys, zipfile
+with zipfile.ZipFile(sys.argv[1]) as zf:
+    for info in zf.infolist():
+        print(f"    {info.file_size:>8}  {info.filename}")
+PY
